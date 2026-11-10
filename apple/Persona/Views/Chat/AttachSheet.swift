@@ -187,9 +187,6 @@ struct AttachSheet<More: View>: View {
     @State private var going = false
     @FocusState private var captionFocused: Bool
     @State private var keyboardUp = false
-    /// A drag of the grid put the keyboard away: the sheet's own pan sits out the rest of it, or the keyboard going down
-    /// would hand it the finger mid-drag and the sheet would drop to its resting height.
-    @State private var dragPutKeyboardAway = false
     /// How far the keyboard reaches up from the bottom of the screen (0: down): the caption rides on it, as in Telegram.
     @State private var keyboard: CGFloat = 0
 
@@ -274,7 +271,7 @@ struct AttachSheet<More: View>: View {
         .scaleEffect(scale)
         .offset(shift)
         .position(x: width / 2, y: sheetTop + sheetHeight / 2)
-        .gesture(AttachPan(enabled: !keyboardUp && !dragPutKeyboardAway && !going, shouldBegin: { location, velocity in
+        .gesture(AttachPan(enabled: !keyboardUp && !going, shouldBegin: { location, velocity in
             beginsDrag(onHeader: location.y >= sheetTop && location.y < sheetTop + Theme.Attach.headerHeight, velocity: velocity, open: offset == 0)
         }, changed: { travel in
             follow(travel, rest: rest)
@@ -343,20 +340,10 @@ struct AttachSheet<More: View>: View {
             AttachNoAccess(settings: openSettings, allPhotos: { leave(.then(picked, allPhotos)) })
         case .full, .limited:
             AttachGrid(library: library, picked: $picked, width: width, camera: camera.map { camera in { leave(.then(picked, camera)) } },
-                       limited: library.access == .limited, photoRoom: photoRoom, videoRoom: videoRoom, dragging: gridDragged)
+                       limited: library.access == .limited, photoRoom: photoRoom, videoRoom: videoRoom)
                 .scrollDisabled(!open)
                 .onScrollGeometryChange(for: Bool.self) { $0.contentOffset.y + $0.contentInsets.top <= 1 } action: { _, top in pageAtTop = top }
         }
-    }
-
-    /// Typing the caption, a drag of the grid puts the keyboard away and the caption back down, through the caption's
-    /// own focus (a resign behind SwiftUI's back can come back up). Not `scrollDismissesKeyboard`: it leaves the
-    /// caption's keyboard up, the field being outside the grid.
-    private func gridDragged(_ dragging: Bool) {
-        guard dragging else { dragPutKeyboardAway = false; return }
-        guard captionFocused else { return }
-        dragPutKeyboardAway = true
-        captionFocused = false
     }
 
     private func filesPage(open: Bool) -> some View {
@@ -568,8 +555,6 @@ private struct AttachGrid: View {
     var limited: Bool
     var photoRoom: Int
     var videoRoom: Int
-    /// A finger drags the grid (true), or has let go (false).
-    var dragging: (Bool) -> Void
 
     var body: some View {
         #if DEBUG || PERF_SIGNPOST
@@ -600,10 +585,9 @@ private struct AttachGrid: View {
         }
         .contentMargins(.bottom, Theme.Attach.gridBottom, for: .scrollContent)
         .scrollIndicators(.hidden)
-        // A real drag; a touch that may still be a tap (.tracking) is not one.
-        .onScrollPhaseChange { old, phase in
-            if phase == .interacting { dragging(true) } else if old == .interacting { dragging(false) }
-        }
+        // Typing the caption, a drag of the grid puts the keyboard away and the caption back down. Not
+        // `scrollDismissesKeyboard`: it leaves the caption's keyboard up, the field being outside the grid.
+        .onScrollPhaseChange { _, phase in if phase == .interacting { Keyboard.dismiss() } }
         .accessibilityIdentifier("attach-grid")
     }
 

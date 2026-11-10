@@ -1308,12 +1308,12 @@ no initial Working row so the message shifted by one row, and pending local remo
   reached the screen's bottom (its frame in XCUITest too) and drew under the glass keyboard. The panel lets it, and a
   drag of the grid puts the keyboard away; a test asserts on what must stay visible, not on the scroll view's frame.
 - `.scrollDismissesKeyboard(.immediately)` on the grid scrolled it and left the caption's keyboard up (the field is
-  outside the scroll view). `Keyboard.dismiss()` on `.interacting` in `onScrollPhaseChange` (as the chat list does,
-  #1823) closed it, but the sheet's own pull-down, off while the keyboard is up, came on mid-drag, took the finger and
-  dropped the sheet to rest, and the keyboard came back. The grid reports the drag instead; the sheet clears the
-  caption's `@FocusState` and keeps its pan off until that finger lifts. Assert the keyboard stays down and the sheet
-  stays put, not only that the keyboard went. XCUITest's keyboard element is the keys alone: the suggestion bar sits
-  above its `minY`.
+  outside the scroll view): call `Keyboard.dismiss()` on `.interacting` in `onScrollPhaseChange`, as the chat list does
+  (#1823). XCUITest's keyboard element is the keys alone: the suggestion bar sits above its `minY`.
+- XCUITest's `typeText` can hide the keyboard while it switches layouts (zh-Hans to English and back) and bring it back
+  a moment later. A swipe right after typing then lands with the keyboard down: in the panel the pull at the grid's top
+  was the sheet's, it dropped to rest and the still-focused caption brought the keyboard back. Wait until what rides
+  on the keyboard is back on it before dragging, and assert the keyboard stays down and the sheet stays put.
 
 ## Row `confirmationDialog` lacks Cancel (2026-11-05, #1830)
 

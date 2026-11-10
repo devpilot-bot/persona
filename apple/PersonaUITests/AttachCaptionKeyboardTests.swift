@@ -75,8 +75,11 @@ final class AttachCaptionKeyboardTests: XCTestCase {
         let picked = app.buttons.matching(NSPredicate(format: "identifier == %@ AND selected == true", "attach-photo")).firstMatch
         XCTAssertTrue(picked.isHittable, "the picked photo stays in view over the keyboard")
 
-        // The caption is the composer's draft: leave it as it was for the next run.
-        caption.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: typed.count))
+        // typeText may hide the keyboard while it switches layouts and bring it back a moment later: with it down, a
+        // pull at the grid's top is the sheet's (it closes the panel then), so drag only once the caption is back on it.
+        let back = Date().addingTimeInterval(5)
+        while caption.frame.maxY > keys, Date() < back { RunLoop.current.run(until: Date().addingTimeInterval(0.2)) }
+        XCTAssertLessThanOrEqual(caption.frame.maxY, keys, "the caption is back on the keyboard after typing")
         grid.swipeDown() // at its top: it bounces, and the drag is enough
         XCTAssertTrue(keyboard.waitForNonExistence(timeout: 5), "dragging the grid puts the keyboard away")
         settle()
@@ -85,10 +88,11 @@ final class AttachCaptionKeyboardTests: XCTestCase {
         XCTAssertEqual(close.frame.minY, top, accuracy: 2, "the sheet stays open: the drag that put the keyboard away does not take it down")
         XCTAssertTrue(caption.isHittable, "the caption is still there with the keyboard down")
         XCTAssertEqual(caption.frame.maxY, resting.maxY, accuracy: 2, "the caption (\(caption.frame)) goes back down to where it was (\(resting))")
+        clearDraft(caption, keyboard: keyboard, grid: grid) // the caption is the composer's draft: leave it as it was
         sleep(2) // drafts are saved a moment after the last change
     }
 
-    /// Empties a draft an earlier run left in the caption (the composer's draft), and puts the keyboard away again.
+    /// Empties the caption (the composer's draft, kept across runs), and puts the keyboard away again.
     @MainActor private func clearDraft(_ caption: XCUIElement, keyboard: XCUIElement, grid: XCUIElement) {
         let value = caption.value as? String ?? ""
         guard !value.isEmpty, value != caption.placeholderValue else { return }
