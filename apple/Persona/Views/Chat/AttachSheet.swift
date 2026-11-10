@@ -187,6 +187,11 @@ struct AttachSheet<More: View>: View {
     @State private var going = false
     @FocusState private var captionFocused: Bool
     @State private var keyboardUp = false
+    /// A drag of the grid put the keyboard away: the sheet's own pan sits out the rest of it, or the keyboard going down
+    /// would hand it the finger mid-drag and the sheet would drop to its resting height.
+    @State private var dragPutKeyboardAway = false
+    /// How far the keyboard reaches up from the bottom of the screen (0: down): the caption rides on it, as in Telegram.
+    @State private var keyboard: CGFloat = 0
 
     private var tabs: [AttachTab] { showsMore ? AttachTab.allCases : [.photos, .files] }
     private var surface: Color { AppStyle.current.usesBeautifulUI ? theme.colors.surface : Theme.Shell.composer }
@@ -213,9 +218,24 @@ struct AttachSheet<More: View>: View {
             .onChange(of: panel.leaving != nil) { _, leaving in if leaving, let outcome = panel.leaving { leave(outcome) } }
             .onChange(of: captionFocused) { _, focused in if focused { settle(to: 0, velocity: 0, motion: Theme.Motion.keyboard) } }
         }
+        // The sheet lays itself out over the whole screen, so the system's keyboard avoidance would move nothing in it
+        // and the caption would stay under the keyboard (#3004): the keyboard's own frame says how far up things go.
+        .ignoresSafeArea(.keyboard)
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in keyboardUp = true }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in keyboardUp = false }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { keyboardMoved($0) }
         .task { await library.load() }
+    }
+
+    /// The keyboard comes up, goes down or changes height: the caption moves with it, on its curve.
+    /// The panel is the iPhone's only (the iPad keeps the menu), where the window is the whole screen.
+    private func keyboardMoved(_ note: Notification) {
+        let end = note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect
+        let screen = (note.object as? UIScreen)?.bounds
+            ?? UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.screen.bounds }.first
+        let reach = AttachSheetPhysics.keyboardReach(end: end, screen: screen)
+        guard reach != keyboard else { return }
+        withAnimation(reduceMotion ? nil : Theme.Motion.keyboard) { keyboard = reach }
     }
 
     // MARK: The sheet
@@ -236,19 +256,22 @@ struct AttachSheet<More: View>: View {
             bottomLeadingRadius: round + (Theme.Attach.bottomRadius - round) * cornered,
             bottomTrailingRadius: round + (Theme.Attach.bottomRadius - round) * cornered,
             topTrailingRadius: round + (Theme.Attach.topRadius - round) * cornered, style: .continuous)
+        // The sheet reaches the screen's bottom and is open all the way while the keyboard is up (the caption opens it),
+        // so the keyboard covers its last `keyboard` points and the caption sits on it. The grid goes on under the
+        // keyboard, as scroll views do; scrolling it puts the keyboard away.
         return VStack(spacing: 0) {
             header
             page(width: width, open: offset == 0)
         }
         .opacity(contentShown ? 1 : 0)
-        .overlay(alignment: .bottom) { bar(width: width).opacity(contentShown ? 1 : 0) }
+        .overlay(alignment: .bottom) { bar(width: width).padding(.bottom, keyboard).opacity(contentShown ? 1 : 0) }
         .frame(width: width, height: sheetHeight)
         .background(surface, in: shape)
         .clipShape(shape)
         .scaleEffect(scale)
         .offset(shift)
         .position(x: width / 2, y: sheetTop + sheetHeight / 2)
-        .gesture(AttachPan(enabled: !keyboardUp && !going, shouldBegin: { location, velocity in
+        .gesture(AttachPan(enabled: !keyboardUp && !dragPutKeyboardAway && !going, shouldBegin: { location, velocity in
             beginsDrag(onHeader: location.y >= sheetTop && location.y < sheetTop + Theme.Attach.headerHeight, velocity: velocity, open: offset == 0)
         }, changed: { travel in
             follow(travel, rest: rest)
@@ -317,10 +340,20 @@ struct AttachSheet<More: View>: View {
             AttachNoAccess(settings: openSettings, allPhotos: { leave(.then(picked, allPhotos)) })
         case .full, .limited:
             AttachGrid(library: library, picked: $picked, width: width, camera: camera.map { camera in { leave(.then(picked, camera)) } },
-                       limited: library.access == .limited, photoRoom: photoRoom, videoRoom: videoRoom)
+                       limited: library.access == .limited, photoRoom: photoRoom, videoRoom: videoRoom, dragging: gridDragged)
                 .scrollDisabled(!open)
                 .onScrollGeometryChange(for: Bool.self) { $0.contentOffset.y + $0.contentInsets.top <= 1 } action: { _, top in pageAtTop = top }
         }
+    }
+
+    /// Typing the caption, a drag of the grid puts the keyboard away and the caption back down, through the caption's
+    /// own focus (a resign behind SwiftUI's back can come back up). Not `scrollDismissesKeyboard`: it leaves the
+    /// caption's keyboard up, the field being outside the grid.
+    private func gridDragged(_ dragging: Bool) {
+        guard dragging else { dragPutKeyboardAway = false; return }
+        guard captionFocused else { return }
+        dragPutKeyboardAway = true
+        captionFocused = false
     }
 
     private func filesPage(open: Bool) -> some View {
@@ -532,6 +565,8 @@ private struct AttachGrid: View {
     var limited: Bool
     var photoRoom: Int
     var videoRoom: Int
+    /// A finger drags the grid (true), or has let go (false).
+    var dragging: (Bool) -> Void
 
     var body: some View {
         let cell = AttachSheetPhysics.cell(width: width)
@@ -559,6 +594,10 @@ private struct AttachGrid: View {
         }
         .contentMargins(.bottom, Theme.Attach.gridBottom, for: .scrollContent)
         .scrollIndicators(.hidden)
+        // A real drag; a touch that may still be a tap (.tracking) is not one.
+        .onScrollPhaseChange { old, phase in
+            if phase == .interacting { dragging(true) } else if old == .interacting { dragging(false) }
+        }
         .accessibilityIdentifier("attach-grid")
     }
 
