@@ -18,7 +18,7 @@ import { baseName, tabLabel } from "../lib/format";
 import { agentKey, isSpacePinned, pinnedSessions } from "../lib/pins";
 import { firstAndCurrent } from "../lib/persona-nav";
 import { pinOrder, sidebarConversations, usePinnedConversations } from "../lib/conversation-pins";
-import { autoConversations, autoOrigin, isAutoConversation, originLabel, type AutoOrigin, type OriginTally } from "../lib/conversation-origins";
+import { autoConversations, autoOrigin, isAutoConversation, ORIGIN_BRAND, ORIGIN_ICON, originLabel, type OriginTally } from "../lib/conversation-origins";
 import { ConversationRowMenu, pinnedSectionItems } from "./ConversationMenu";
 import { href, navigate, type Route } from "../lib/router";
 import { useAgentSessions, useFullAgentSessions } from "../lib/sessions";
@@ -937,8 +937,6 @@ const FilterBar = memo(function FilterBar({ selection, counts, onChoose, botmux 
 });
 
 // Every group in the sidebar is one of these: its title folds it, and the fold is kept in this browser (useFolded).
-const ORIGIN_ICON: Record<AutoOrigin, IconName> = { inbox: "inbox", task: "clock", lark_agent: "at", spawned: "fork", extension: "extension", other: "more" };
-
 /** The open conversation is an automatic one with no row of its own above (not pinned): its group's row stands for it. */
 function isOpenAuto(conversations: readonly Session[] | undefined, activeKey: string, shown: readonly Session[]): boolean {
   if (!activeKey.startsWith("j:")) return false;
@@ -1000,7 +998,7 @@ function AutoConversations({ conversations, main, shown, activeKey, holds, reg, 
           {groups.map((g) => {
             const k = `auto:${g.origin}`;
             return (
-              <NavRow key={g.origin} k={k} reg={reg} hover={hover} active={activeKey === k || openGroup === g.origin} to={{ name: "history", origin: g.origin }} go={go} icon={ORIGIN_ICON[g.origin]} label={originLabel(g.origin)} hint={String(g.count)} badge={g.needsYou || undefined} badgeTone="attention" dot={!g.needsYou && g.working > 0 ? "working" : undefined} />
+              <NavRow key={g.origin} k={k} reg={reg} hover={hover} active={activeKey === k || openGroup === g.origin} to={{ name: "history", origin: g.origin }} go={go} icon={ORIGIN_ICON[g.origin]} brand={ORIGIN_BRAND[g.origin]} label={originLabel(g.origin)} hint={String(g.count)} badge={g.needsYou || undefined} badgeTone="attention" dot={!g.needsYou && g.working > 0 ? "working" : undefined} />
             );
           })}
         </div>

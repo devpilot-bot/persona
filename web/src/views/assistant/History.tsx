@@ -2,7 +2,7 @@
 // Persona has, the main one first, the rest newest first by day; search on the title and the last message; a row's menu
 // renames it, copies its id, archives it (the main one can't be). The archived ones are folded at the end.
 import { conversationChannel, useChannels } from "../../lib/channels";
-import { ChannelMark } from "../../ui/ChannelMark";
+import { ChannelMark, OriginMark } from "../../ui/ChannelMark";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, enc, errorText } from "../../lib/api";
 import { ago, stateOf } from "../../lib/format";
@@ -15,7 +15,7 @@ import { Icon } from "../../ui/icons";
 import { arrange, conversationTitle, filterConversations, mergeConversations, splitTitle, type Conversation } from "./conversations";
 import { Empty, inputClass, SectionTitle } from "./parts";
 import { Chip } from "../inbox/InboxParts";
-import { autoConversations, matchesOrigin, originLabel, parseOriginFilter, type OriginFilter } from "../../lib/conversation-origins";
+import { autoConversations, externalOrigin, matchesOrigin, originLabel, parseOriginFilter, type OriginFilter } from "../../lib/conversation-origins";
 import { t } from "../../i18n";
 
 const NONE: Session[] = [];
@@ -247,6 +247,8 @@ function ConvRow({ s, main, now, onRename, onArchive }: { s: Conversation; main?
   const st = stateOf(s);
   const flagged = st === "needs_you" || st === "working" || st === "unread";
   const last = plainMarkdown(s.last_text);
+  // opened by an extension (#3758): where it came from, in the channel's place
+  const origin = externalOrigin(s);
   const items: MenuItem[] = [
     ...(!main ? [{ key: "rename", label: t("assistant-history.rename_ellipsis"), icon: "pencil" as const, onSelect: () => onRename(s) }] : []),
     { key: "copy", label: t("assistant-history.copy_session_id"), icon: "copy", onSelect: () => void copyText(s.session_id) },
@@ -280,7 +282,7 @@ function ConvRow({ s, main, now, onRename, onArchive }: { s: Conversation; main?
               )}
             </span>
             {main && <span className="inline-flex h-5 shrink-0 items-center whitespace-nowrap rounded-full bg-accent-tint px-2 text-[11px] font-medium text-accent-ink">{t("assistant-history.main_chat")}</span>}
-            <ConvChannel ids={s.channels} />
+            {origin ? <OriginMark origin={origin} size={16} /> : <ConvChannel ids={s.channels} />}
           </span>
           {last && <span className="mt-0.5 block truncate text-[12px] text-ink-3">{last}</span>}
         </span>

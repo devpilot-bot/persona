@@ -1243,8 +1243,8 @@ struct AssistantSidebar: View {
         .accessibilityIdentifier("sidebar-auto")
         if autoOpen {
             ForEach(split.bySource(tasks: taskChats.known(on: model.api)), id: \.source) { g in
-                sourceRow(g.source.name, symbol: g.source.symbol, count: g.sessions.count, needsYou: g.needsYou, working: g.working,
-                          id: g.source.id) { autoList = AutoConversationsRoute(source: g.source.id) }
+                sourceRow(g.source.name, symbol: g.source.symbol, brand: g.source.brand, count: g.sessions.count, needsYou: g.needsYou,
+                          working: g.working, id: g.source.id) { autoList = AutoConversationsRoute(source: g.source.id) }
             }
             sourceRow(String(localized: "All Chats"), symbol: Theme.Icon.list, count: nil, needsYou: 0, working: false, id: "all") {
                 autoList = AutoConversationsRoute(source: nil)
@@ -1253,12 +1253,17 @@ struct AssistantSidebar: View {
     }
 
     /// One source under an open Auto Chats: a small row, set in from the group's, with its count and state (All Chats: none).
-    private func sourceRow(_ name: String, symbol: String, count: Int?, needsYou: Int, working: Bool, id: String,
+    /// A source with a brand (Lark /agent) shows its mark instead of the symbol (#3758).
+    private func sourceRow(_ name: String, symbol: String, brand: String? = nil, count: Int?, needsYou: Int, working: Bool, id: String,
                            run: @escaping () -> Void) -> some View {
         Button(action: run) {
             HStack(spacing: Theme.Space.s) {
-                ThemedIcon(symbol).font(Theme.Font.label).foregroundStyle(.secondary)
-                    .scaledFrame(width: Theme.Size.iconS)
+                if let brand {
+                    BrandMark(brand, side: Theme.Size.markS).scaledFrame(width: Theme.Size.iconS)
+                } else {
+                    ThemedIcon(symbol).font(Theme.Font.label).foregroundStyle(.secondary)
+                        .scaledFrame(width: Theme.Size.iconS)
+                }
                 Text(name).font(Theme.Font.secondary).foregroundStyle(Color.primary).lineLimit(1)
                 if let count {
                     Text("\(count)").font(Theme.Font.secondary.monospacedDigit()).foregroundStyle(.secondary).lineLimit(1)
@@ -1404,7 +1409,7 @@ struct AssistantSidebar: View {
                     ConversationMark(id: s.sessionID)
                 }
                 titleText(title, named: !isMain)
-                ConversationChannelMark(ids: s.channels) // the channel its latest message came in from
+                ConversationSourceMark(origin: s.origin, channels: s.channels) // the extension that opened it, or its latest message's channel
                 Spacer(minLength: Theme.Space.xs)
                 mark(s)
             }
@@ -1422,7 +1427,7 @@ struct AssistantSidebar: View {
         .buttonStyle(.plain)
         .tag(s.key)
         .macListRow(selected: selected, in: Rectangle(), drawsShade: false) // the row draws its own (`selectedFill`)
-        .accessibilityLabel([title, isMain && s.title != title ? s.title : nil, stateWord(s), preview.isEmpty ? nil : preview]
+        .accessibilityLabel([title, isMain && s.title != title ? s.title : nil, AutoConversationSource.external(s.origin)?.from, stateWord(s), preview.isEmpty ? nil : preview]
             .compactMap { $0 }.joined(separator: String(localized: ", ", comment: "Separator between parts of an accessibility label")))
         .accessibilityAddTraits(selected ? .isSelected : [])
         .accessibilityIdentifier(isMain ? "sidebar-main" : "sidebar-conversation")

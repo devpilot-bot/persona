@@ -3760,6 +3760,15 @@ struct ChatView: View {
         return [s.sourceSubtitle, machine, place.isEmpty ? nil : place, s.hasSource ? nil : s.agentLabel, s.stateLabel(muted: model.isMuted(s))].compactMap { $0 }.joined(separator: " · ")
     }
 
+    /// The extension that opened this Persona conversation (#3758), when `item` is the message it opened it with: the
+    /// conversation's first user message, once the page has loaded back to its start (with more to load, the first one
+    /// here is not the first). nil for every other message and conversation.
+    private func externalOpening(_ item: Item) -> AutoConversationSource? {
+        guard style == .assistant, let source = AutoConversationSource.external(session?.origin), !store.hasMore,
+              store.items.first(where: { $0.role == "user" && $0.kind == .text })?.id == item.id else { return nil }
+        return source
+    }
+
     @ViewBuilder private func rowView(_ row: ChatRow, isLatest: Bool, live: Bool, showsSource: Bool = true) -> some View {
         switch row {
         case .user(let i):
@@ -3773,7 +3782,7 @@ struct ChatView: View {
             } else if let from = i.from {
                 PeerMessage(item: i, from: from)
             } else {
-                UserBubble(item: i).equatable()
+                UserBubble(item: i, external: externalOpening(i)).equatable()
             }
         case .assistant(let i): AssistantText(item: i).equatable()
         case .thinking(let i):

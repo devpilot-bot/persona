@@ -3,6 +3,7 @@
 // workflow runs' calls (their cards), the items that came in live (their words fade in), and the key the open / closed
 // state is kept under.
 import { createContext, useContext } from "react";
+import type { ExternalOrigin } from "../../lib/conversation-origins";
 import { emptyTaskIndex, type TaskIndex } from "../../lib/tasks";
 import type { Subagent } from "../../lib/types";
 import { NO_WORKFLOW_CALLS, type WorkflowCalls } from "../../lib/workflows";
@@ -22,6 +23,8 @@ export interface ChatContextValue {
   workflowCalls?: WorkflowCalls;
   /** Conversation identity; both styles share the collapsed work-line default (#2602). */
   lineStyle?: WorkLineStyle;
+  /** The message an extension opened this conversation with and where it came from (#3758, `externalOpening`). */
+  opening?: { id: string; origin: ExternalOrigin };
 }
 
 export const ChatContext = createContext<ChatContextValue>({ tasks: emptyTaskIndex(), subagents: [], scope: "", workflowCalls: NO_WORKFLOW_CALLS });

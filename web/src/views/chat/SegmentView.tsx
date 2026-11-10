@@ -11,7 +11,8 @@ import { NO_WORKFLOW_CALLS } from "../../lib/workflows";
 import { channelOf, useChannels } from "../../lib/channels";
 import { splitQuotes } from "../../lib/drafts";
 import { EASE } from "../../ui/atoms";
-import { ChannelMark } from "../../ui/ChannelMark";
+import { ChannelMark, OriginMark } from "../../ui/ChannelMark";
+import { externalFrom, type ExternalOrigin } from "../../lib/conversation-origins";
 import { Markdown } from "../../ui/Markdown";
 import { CardConversation, CardItem } from "../../ui/AssistantCard";
 import { cardReply } from "../../lib/assistant-blocks";
@@ -67,6 +68,9 @@ export function segmentHeight(user: UserMessage | undefined, nodes: WorkNode[]):
  *  act on) and without "Sending…" (the page says it is preparing). */
 export function UserBubble({ msg, mid, sid, pending, sendState, starting }: { msg: UserMessage; mid: string; sid: string; pending?: boolean; sendState?: "sending" | "sent" | "failed"; starting?: boolean }) {
   const own = isOwnMessage(msg);
+  // the message an extension opened the conversation with (#3758)
+  const { opening } = useChatContext();
+  const openedBy = opening && opening.id === msg.id ? opening.origin : undefined;
   return (
     <div className="ml-auto flex max-w-[488px] min-w-0 flex-col items-end gap-1.5 pl-[12%]" style={pending ? { animation: `fade-up 300ms ${EASE} both` } : undefined} data-user-bubble data-send-state={sendState} data-items={pending || starting ? undefined : [msg.id, ...msg.images.map((i) => i.id)].join(" ")}>
       {msg.images.length > 0 && (
@@ -90,7 +94,7 @@ export function UserBubble({ msg, mid, sid, pending, sendState, starting }: { ms
           </MessageActions>
         ))}
       {(pending || msg.queued) && <span className="text-[11px] text-ink-3">{pending ? t("chat-segmentview.sending") : t("chat-segmentview.queued")}</span>}
-      {!pending && !starting && <ChannelSource clientMsgId={msg.client_msg_id} />}
+      {!pending && !starting && <ChannelSource clientMsgId={msg.client_msg_id} openedBy={openedBy} />}
     </div>
   );
 }
@@ -160,9 +164,18 @@ function BubbleText({ text: full, ts, mid, sid, own, pending }: { text: string; 
   );
 }
 
-/** "From WeChat" under a message that came from a channel (its client_msg_id is `<channel>-…`, docs/extensions/channels.md). */
-function ChannelSource({ clientMsgId }: { clientMsgId?: string }) {
+/** "From WeChat" under a message that came from a channel (its client_msg_id is `<channel>-…`, docs/extensions/channels.md);
+ *  else, under the message an extension opened the conversation with, "From Lark /agent" / "From an extension" (#3758). */
+function ChannelSource({ clientMsgId, openedBy }: { clientMsgId?: string; openedBy?: ExternalOrigin }) {
   const via = channelOf(clientMsgId, useChannels());
+  if (!via && openedBy) {
+    return (
+      <span data-opened-by={openedBy} className="flex items-center gap-1.5 whitespace-nowrap text-[11px] text-ink-3">
+        <OriginMark origin={openedBy} size={14} decorative />
+        {externalFrom(openedBy)}
+      </span>
+    );
+  }
   if (!via) return null;
   return (
     <span className="flex items-center gap-1.5 whitespace-nowrap text-[11px] text-ink-3">
