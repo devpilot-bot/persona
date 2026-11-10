@@ -25,6 +25,9 @@ export interface ChatContextValue {
   lineStyle?: WorkLineStyle;
   /** The message an extension opened this conversation with and where it came from (#3758, `externalOpening`). */
   opening?: { id: string; origin: ExternalOrigin };
+  /** The exchange whose last words carried the closeout the card above the transcript shows (#3612): they are drawn
+   *  without the raw block. Unset while no card is shown. */
+  closeoutSegment?: string;
 }
 
 export const ChatContext = createContext<ChatContextValue>({ tasks: emptyTaskIndex(), subagents: [], scope: "", workflowCalls: NO_WORKFLOW_CALLS });
