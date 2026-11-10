@@ -55,9 +55,12 @@ type Record struct {
 	Remote            *Remote         `json:"remote,omitempty"`
 	// DisabledContributions are the contributions the user switched off ("<point>/<id>", docs/extensions/extensions.md "Contribution switches"):
 	// they do not take effect while the rest of the extension runs. A connector's switch is the connector's own.
-	DisabledContributions []string  `json:"disabled_contributions,omitempty"`
-	InstalledAt           time.Time `json:"installed_at"`
-	UpdatedAt             time.Time `json:"updated_at"`
+	DisabledContributions []string `json:"disabled_contributions,omitempty"`
+	// PackOff, on an extension pack, are the members switching the pack off switched off (docs/extensions/extensions.md
+	// "Dependencies, exports and packs", #1830): switching the pack back on turns these on again and no others.
+	PackOff     []string  `json:"pack_off,omitempty"`
+	InstalledAt time.Time `json:"installed_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }
 
 // Remote is a plugin that runs elsewhere and is reached on these sockets.
@@ -267,6 +270,18 @@ func (r *Registry) AddBuiltin(m *Manifest, dir string, enabled bool) error {
 	return nil
 }
 
+// AddBuiltinTranslated is AddBuiltin for a manifest written in English, with its text in the other languages (a
+// built-in has no package to read l10n/ from).
+func (r *Registry) AddBuiltinTranslated(m *Manifest, dir string, enabled bool, ts Translations) error {
+	if err := r.AddBuiltin(m, dir, enabled); err != nil {
+		return err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.extensions[m.ID].L10n = ts
+	return nil
+}
+
 // KeepOff holds the built-in extension id (registered, before Load) switched off whatever its row says; switching it
 // on answers why. For a built-in that took over a hub.json entry written disabled (docs/extensions/extensions.md "Built-in voice extension"):
 // hub.json has the last word on it, its settings and secrets stay editable, and its row keeps its own switch for when
@@ -419,6 +434,7 @@ func snapshotExtension(p *Extension) *Extension {
 		out.Record.Granted.Storage = &storage
 	}
 	out.Record.DisabledContributions = slices.Clone(p.Record.DisabledContributions)
+	out.Record.PackOff = slices.Clone(p.Record.PackOff)
 	if p.Record.Remote != nil {
 		remote := *p.Record.Remote
 		out.Record.Remote = &remote

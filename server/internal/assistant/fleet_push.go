@@ -257,6 +257,8 @@ func (s *Service) notifyFinishedNow(machine, id string, gen int, t fleetTimings)
 	if verdict == finishStale || verdict == finishHold {
 		return // the turn goes on: its mark waits for how it ends
 	}
+	// A supervision turn about a failed start ended: what it left of the start ends too (start_remedy.go, #2570).
+	go s.remedyTurnEnded(context.Background(), id)
 	// "Only long-running turns" is for turns the user started: a quick answer is read where it was asked. A morning briefing or a task notice
 	// has nobody waiting for it; a quick one was never pushed and the user had to go and look (#3438). The mark is
 	// used up by this turn whether it is pushed or dropped (notify_user, seen, muted): left over, the user's own next
@@ -275,7 +277,7 @@ func (s *Service) notifyFinishedNow(machine, id string, gen int, t fleetTimings)
 	// The own conversation of a scheduled task that pushes only what its runs send, finished normally (#2396): its
 	// news, if any, went out with notify_user. Decided after settle, not as a push: a turn held for its background
 	// work stays followed, and the wake that ends it is judged on its own (an error there is pushed).
-	if s.quietTaskFinish(sess) {
+	if s.quietTaskFinish(sess) || s.quietScheduledInput(context.Background(), machine, sess) {
 		return
 	}
 	// A turn a follow-up (supervision) message started, finished normally (#3124): what the user needs to know went out with notify_user.

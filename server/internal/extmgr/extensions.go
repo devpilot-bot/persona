@@ -176,6 +176,9 @@ type extensions struct {
 	logf, journal func(string, ...any)
 	// stats are how the extensions run (extension_metrics.go).
 	stats *extensionMetrics
+	// switchMu puts the user's Enabled switches one after another (switchExtension, enableChannel): a pack's switch
+	// reads and writes its record of members (#1830). Taken before any registry operation, never inside one.
+	switchMu sync.Mutex
 
 	h    *Manager
 	ctx  context.Context
@@ -216,8 +219,9 @@ type extensions struct {
 	sentLimit sentLimiter
 	// voice is the hub.json entry the built-in voice extension took over (nil without one); voiceID the built-in's id
 	// once registered, "" when there is none (voice_extension.go).
-	voice   *ExtensionConfig
-	voiceID string
+	voice            *ExtensionConfig
+	voiceID          string
+	voiceGatewaySent string
 	// hubRelay is how a relayed manager's extensions reach the hub's API (hub_relay.go).
 	hubRelay hubRelay
 }
@@ -463,6 +467,9 @@ func (h *Manager) attachExtensions(ctx context.Context) {
 	if err := reg.AddBuiltin(egoManifest(h), "", false); err != nil { // the same, for ego lite (browser.go)
 		h.logf("plugin ego: %v", err)
 	}
+	if err := reg.AddBuiltinTranslated(iphoneManifest(h), "", false, iphoneTranslations()); err != nil { // the same, for paired iPhones (iphone.go)
+		h.logf("plugin iphone: %v", err)
+	}
 	if err := reg.AddBuiltin(imessageManifest(h), "", false); err != nil { // which Mac's Messages (imessage_extension.go)
 		h.logf("plugin imessage: %v", err)
 	}
@@ -527,6 +534,17 @@ func (ps *extensions) changed(c extension.Change) {
 		ps.nodes.drop(ps.root, c.Old.Record.ID, "")
 	}
 	ps.apply(ctx, c.ID)
+	if ps.voiceID != "" && c.ID != ps.voiceID {
+		next := string(ps.voiceGatewaySpec(ctx))
+		ps.mu.Lock()
+		changedGW := next != ps.voiceGatewaySent
+		ps.mu.Unlock()
+		if changedGW {
+			if vp := ps.reg.Get(ps.voiceID); vp != nil && vp.Record.Enabled {
+				ps.apply(ctx, ps.voiceID)
+			}
+		}
+	}
 	ps.forgetAuth(c.ID) // another version, removed, switched, set up again: ask again
 	switch c.Kind {
 	case "removed", "upgraded", "rolled_back": // only the version installed now keeps its packages for computers
@@ -562,6 +580,9 @@ func (ps *extensions) changed(c extension.Change) {
 	}
 	if c.ID == egoExtensionID && ps.h != nil {
 		ps.h.browserChanged(ctx)
+	}
+	if c.ID == iphoneExtensionID && ps.h != nil {
+		ps.h.iphoneChanged(ctx)
 	}
 	if c.ID == imessageExtensionID && ps.h != nil {
 		ps.h.applyIMessage() // its Mac changed, or it went on or off (imessage_extension.go)

@@ -27,6 +27,8 @@ import persona.core.contracts.PlanTask
 import persona.core.contracts.TaskPlan
 import persona.core.contracts.TaskPlanEvent
 import persona.core.contracts.Todo
+import persona.core.contracts.TodoDue
+import persona.core.contracts.TodoAsk
 import persona.core.contracts.TodoSpace
 import persona.core.contracts.TodosEvent
 import persona.core.contracts.draftPlaceholder
@@ -62,6 +64,8 @@ class TasksStore(
     /** The hub's last answer (a list, or an older hub's 404 as none); null until it answers, while the cache shows. */
     private var answered: List<Todo>? = null
     private val acceptedAsks = mutableSetOf<Pair<String, String>>()
+    /** Confirmed writes fence only reads already in flight; a later read may legitimately reopen the task. */
+    private val finishedTasks = mutableMapOf<String, Pair<TodoAsk, Todo>>()
     private val writing = Mutex()
     private val refreshingTodos = Mutex()
     private val agentLookup = TaskAgentLookup(api, scope)
@@ -122,13 +126,20 @@ class TasksStore(
         scope.launch {
             refreshingTodos.withLock {
                 try {
+                    val completionsBeforeRead = synchronized(todosLock) { finishedTasks.toMap() }
                     val list = api.todos()
                     _todosSupported.value = true
                     todosLoaded = true
                     synchronized(todosLock) {
                         val shown = list.map { todo ->
-                            if (todo.ask?.askedAt?.let { (todo.id to it) in acceptedAsks } == true) todo.copy(ask = null) else todo
+                            val completion = finishedTasks[todo.id]?.takeIf { it != completionsBeforeRead[todo.id] }
+                            when {
+                                completion != null && (todo.ask == null || todo.ask == completion.first) -> completion.second
+                                todo.ask?.askedAt?.let { (todo.id to it) in acceptedAsks } == true -> todo.copy(ask = null)
+                                else -> todo
+                            }
                         }
+                        finishedTasks.keys.retainAll(shown.map { it.id }.toSet())
                         answered = shown
                         if (shown != _todos.value) _todos.value = shown
                     }
@@ -180,6 +191,24 @@ class TasksStore(
             updated
         } catch (t: Throwable) {
             _todos.value = before
+            throw t
+        }
+    }
+
+    /**
+     * Moves a to-do's due date (#2045, the calendar): drawn there at once, then the hub's answer; a failed save puts
+     * back only this to-do, unless something else has changed it since, and throws.
+     */
+    suspend fun setTodoDue(id: String, due: TodoDue): Todo {
+        val before = _todos.value.firstOrNull { it.id == id } ?: error("no to-do $id")
+        val moved = before.withDue(due)
+        _todos.update { list -> list.map { if (it.id == id) moved else it } }
+        return try {
+            val updated = api.setTodoDue(id, due)
+            _todos.update { list -> list.map { if (it.id == updated.id) updated else it } }
+            updated
+        } catch (t: Throwable) {
+            _todos.update { list -> list.map { if (it.id == id && it == moved) before else it } }
             throw t
         }
     }
@@ -328,7 +357,9 @@ class TasksStore(
         val now = clock.instant()
         val today = LocalDate.now(clock)
         todayAsked[conversation]?.let { (at, day) ->
-            if (LocalDate.ofInstant(at, clock.zone) == today &&
+            // at.atZone(…).toLocalDate(), not LocalDate.ofInstant: that one is Java 9, on Android only from API 34, and this
+            // module is plain JVM (no lint, no desugaring), so it built fine and threw NoSuchMethodError on API 30–33 (#5227).
+            if (at.atZone(clock.zone).toLocalDate() == today &&
                 (day == null || day > today || now < at + todayRecheck)) return
         }
         todayAsked[conversation] = now to null
@@ -418,12 +449,36 @@ class TasksStore(
         }
     }
 
+    /** User completion is not acceptance: no recommendation is sent and no agent is resumed. */
+    fun finishTaskNow(todo: Todo, onError: (Throwable) -> Unit, onChanged: () -> Unit) {
+        val ask = todo.ask?.takeIf { it.outcome == "decide" } ?: return
+        if (todo.isDone || todo.cancelledAt != null) return
+        // Shares acceptance's guard so contradictory actions cannot be submitted together.
+        act("accept:${todo.id}", onError) {
+            val current = _todos.value.firstOrNull { it.id == todo.id }
+            if (current == null || current.ask != ask || current.isDone || current.cancelledAt != null) { onChanged(); return@act }
+            val completed = api.patchTodo(todo.id, done = true)
+            check(completed.id == todo.id && completed.isDone) { "Completion was not confirmed" }
+            synchronized(todosLock) {
+                val confirmed = completed.copy(ask = null)
+                finishedTasks[todo.id] = ask to confirmed
+                _todos.update { rows -> rows.map { if (it.id == todo.id && it.ask == ask) confirmed else it } }
+                answered = (answered ?: written)?.map { if (it.id == todo.id && it.ask == ask) confirmed else it }
+            }
+            routes.update { routes -> routes.filterValues { it != todo.id } }
+            remember()
+            reloadTodos()
+        }
+    }
+
     private fun act(id: String, onError: (Throwable) -> Unit, block: suspend () -> Unit) {
         if (id in busy.value) return
         busy.update { it + id }
         scope.launch {
-            runCatching { block() }.onFailure(onError)
-            busy.update { it - id }
+            try { block() }
+            catch (cancelled: CancellationException) { throw cancelled }
+            catch (error: Throwable) { onError(error) }
+            finally { busy.update { it - id } }
         }
     }
 
