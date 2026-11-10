@@ -22,8 +22,9 @@ final class ExternalConversationsTests: XCTestCase {
     @MainActor private func launch(_ scheme: String, open session: String? = nil) {
         app = XCUIApplication()
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
-        var args = ["-pairURL", pair, "-tab", "assistant", "-newAssistant", "YES", "-ui.scheme", scheme, "-assistant.autoOpen", "YES"]
-        args += session.map { ["-openAssistant", "server/" + $0] } ?? ["-dev.openChat", ""]
+        var args = ["-pairURL", pair, "-tab", "assistant", "-ui.scheme", scheme, "-assistant.autoOpen", "YES"]
+        // `-newAssistant` would start on a new conversation after `-openAssistant` picked this one.
+        args += session.map { ["-openAssistant", "server/" + $0] } ?? ["-newAssistant", "YES", "-dev.openChat", ""]
         app.launchArguments = args
         app.launchPinned()
     }
@@ -83,6 +84,8 @@ final class ExternalConversationsTests: XCTestCase {
             sleep(1)
             shot("chat-lark-\(scheme)")
             openSidebar()
+            if app.buttons["sidebar-auto-inbox"].exists { group.tap() } // closed, Recent's rows come up under it
+            XCTAssertTrue(app.buttons["sidebar-auto-inbox"].waitForNonExistence(timeout: 3), "did not close")
             let open = app.buttons.matching(identifier: "sidebar-conversation")
                 .matching(NSPredicate(format: "label BEGINSWITH %@", "1105 | 研究 | 群里的需求")).firstMatch
             XCTAssertTrue(open.waitForExistence(timeout: 5), "the open one left 最近")
