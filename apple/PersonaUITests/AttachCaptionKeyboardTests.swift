@@ -4,7 +4,7 @@ import XCTest
 /// the keyboard, Send stays tappable and the picked photo stays in view, as in Telegram; dragging the grid puts the
 /// keyboard away for good and the caption goes back down, the sheet staying open. Demo Mode (Demo.json) with photos in
 /// the simulator's library (`xcrun simctl addmedia`); the Photos prompt, if it comes, is allowed. iPhone only: the iPad
-/// keeps the + menu. PERSONA_SHOTS saves the screenshots there too.
+/// keeps the + menu. PERSONA_SHOTS saves the screenshots there too; PERSONA_TEXT_SIZE sets the text size.
 final class AttachCaptionKeyboardTests: XCTestCase {
     private let claude = "macbook/a1f3c2d4-0000-4000-8000-000000000006"
     private let typed = "Look at this one"
@@ -29,6 +29,9 @@ final class AttachCaptionKeyboardTests: XCTestCase {
         }
         let app = XCUIApplication()
         app.launchArguments = ["-demo.on", "YES", "-openSession", claude]
+        if let size = ProcessInfo.processInfo.environment["PERSONA_TEXT_SIZE"] { // e.g. UICTContentSizeCategoryAccessibilityXXXL
+            app.launchArguments += ["-UIPreferredContentSizeCategoryName", size]
+        }
         app.launchPinned()
 
         let plus = app.buttons.matching(NSPredicate(format: "(identifier == %@ OR label IN %@) AND enabled == true", "shell-composer-add", ["添加", "Add"])).firstMatch
