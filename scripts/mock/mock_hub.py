@@ -2432,9 +2432,22 @@ RECORDINGS_TRIMMED = {}
 # recording (`kind: meeting`) as soon as it is stored, from its own sentences; pending leaves them being written; failed says
 # writing them failed; POST /mock/recording_minutes {"mode": …} switches it and forgets the recordings stored so far (a UI
 # test's fresh start on a shared mock).
-# POST /api/v1/recordings/{id}/minutes (write them again) counts in /mock/recordings ("minutes_asked").
+# POST /api/v1/recordings/{id}/minutes (write them again) counts in /mock/recordings ("minutes_asked"); as the hub, the minutes
+# shown stay while new ones are written (pending), and in `ready` mode the next version comes 3 s later.
+# POST /api/v1/recordings/{id}/minutes/todos {version, actions} confirms action items as to-dos (#4062): each gets a to-do and
+# its todo_id; an old version is 409 minutes_stale. POST /mock/recording_minutes_rewrite {"id"} writes the next version at once
+# (what the user sees is then stale).
 RECORDING_MINUTES = [os.environ.get("MOCK_RECORDING_MINUTES", "pending")]
 RECORDING_MINUTES_ASKED = []
+
+
+def recording_minutes_next(rid):
+    """The next version of a stored recording's minutes, written: what regenerating them ends in."""
+    detail = KB_DETAIL.get(("recordings", rid))
+    if not detail or rid not in RECORDINGS: return
+    version = (detail.get("minutes") or {}).get("version", 0) + 1
+    detail["minutes"] = {**recording_minutes(RECORDINGS[rid]), "version": version}
+    detail.setdefault("meta", {})["minutes_state"] = "ready"
 
 
 def recording_minutes(body):
@@ -2444,14 +2457,19 @@ def recording_minutes(body):
     segs = [x for x in body.get("segments", []) if x.get("text")]
     cal = body.get("calendar") or {}
     item = lambda x: {"text": x["text"].rstrip("。"), "at": x["start"]}
+    acts = [x for x in segs if "负责" in x["text"]]
     out = {
+        "version": 1,
         "title": cal.get("title") or body.get("title") or None,
         "when": "2027-01-15 16:00–17:00",
         "where": cal.get("location"),
         "attendees": cal.get("attendees"),
         "points": [item(x) for x in segs[:2]],
         "decisions": [item(x) for x in segs if "决定" in x["text"]],
-        "actions": [{"who": "张三", "what": x["text"].rstrip("。"), "by": "周五前", "at": x["start"]} for x in segs if "负责" in x["text"]],
+        # Who is named before 负责 ("does"), and a deadline when one is said ("周五前").
+        "actions": [{k: v for k, v in {"id": "a%d" % (i + 1), "who": x["text"].split("负责")[0][-3:] or None, "what": x["text"].rstrip("。"),
+                                      "by": "周五前" if "周五前" in x["text"] else None, "at": x["start"], "todo_id": ""}.items() if v is not None}
+                    for i, x in enumerate(acts)],
         "open": [item(x) for x in segs if "没定" in x["text"]],
     }
     return {k: v for k, v in out.items() if v}
@@ -3009,6 +3027,12 @@ def recordings_route(h, method, p):
     if p == "/mock/recordings" and method == "GET":
         return h.send_json({"recordings": RECORDINGS, "deleted": sorted(RECORDINGS_DELETED), "puts": RECORDING_PUTS[0],
                             "minutes_asked": RECORDING_MINUTES_ASKED, "trimmed": sorted(RECORDINGS_TRIMMED)}) or True
+    if p == "/mock/recording_minutes_rewrite" and method == "POST":
+        rid = str(json.loads(h.last_body or b"{}").get("id", "")).lower()
+        if not (KB_DETAIL.get(("recordings", rid)) or {}).get("minutes"):
+            return h.send_json({"error": "no stored recording with minutes"}, 404) or True
+        recording_minutes_next(rid)
+        return h.send_json({"id": rid, "version": KB_DETAIL[("recordings", rid)]["minutes"]["version"]}) or True
     if p == "/mock/recording_trim" and method == "POST":
         rid = str(json.loads(h.last_body or b"{}").get("id", "")).lower()
         detail = KB_DETAIL.get(("recordings", rid))
@@ -3032,6 +3056,27 @@ def recordings_route(h, method, p):
     if not re.fullmatch(UUID_RE, rid):
         return h.send_json({"error": "录音 id 不对"}, 400) or True
     if p.endswith("/live") or p.endswith("/ask"): return meeting_route(h, method, p, rid)
+    if p.endswith("/minutes/todos") and method == "POST":
+        detail = KB_DETAIL.get(("recordings", rid)) or {}
+        minutes = detail.get("minutes")
+        if rid not in RECORDINGS or not minutes: return h.send_json({"error": "没有这条录音的纪要"}, 404) or True
+        body = json.loads(h.last_body or b"{}")
+        if body.get("version") != minutes.get("version"):
+            return h.send_json({"error": "纪要已更新", "code": "minutes_stale"}, 409) or True
+        ids = body.get("actions") or []
+        if not ids: return h.send_json({"error": "actions 不能为空"}, 400) or True
+        acts = {a.get("id"): a for a in minutes.get("actions", [])}
+        if any(i not in acts for i in ids): return h.send_json({"error": "没有这个行动项"}, 404) or True
+        made = []
+        for i in ids:
+            a = acts[i]
+            if a.get("todo_id"): continue  # confirmed before: not again
+            now_str = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            todo = {"id": "todo_" + uuid.uuid4().hex[:8], "title": (a["who"] + ": " if a.get("who") else "") + a["what"],
+                    "notes": "", "done_at": None, "created_at": now_str, "updated_at": now_str, "agents": []}
+            TODOS.insert(0, todo); made.append(todo); a["todo_id"] = todo["id"]
+        if made: push_todos()
+        return h.send_json({"todos": made, "minutes": minutes}) or True
     if p.endswith("/minutes") and method == "POST":
         if rid not in RECORDINGS: return h.send_json({"error": "没有这条录音"}, 404) or True
         if rid in RECORDINGS_TRIMMED:
@@ -3039,7 +3084,9 @@ def recordings_route(h, method, p):
         if not RECORDINGS[rid].get("complete"): return h.send_json({"error": "转写还没完成"}, 409) or True
         RECORDING_MINUTES_ASKED.append(rid)
         detail = KB_DETAIL.setdefault(("recordings", rid), {})
-        detail.pop("minutes", None); detail.setdefault("meta", {})["minutes_state"] = "pending"
+        detail.setdefault("meta", {})["minutes_state"] = "pending"  # the minutes shown stay meanwhile, as the hub's
+        if RECORDING_MINUTES[0] == "ready":
+            threading.Timer(3, recording_minutes_next, args=(rid,)).start()
         return h.send_json({"state": "pending"}, 202) or True
     kb = KB.setdefault("recordings", [])
     if method == "DELETE":

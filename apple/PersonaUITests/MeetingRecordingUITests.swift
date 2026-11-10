@@ -174,6 +174,61 @@ final class MeetingRecordingUITests: XCTestCase {
         XCTAssertTrue(app.descendants(matching: .any)["minutes-waiting"].firstMatch.waitForExistence(timeout: 5), app.debugDescription)
     }
 
+    /// Action items as to-dos and Regenerate (#4062): two suggestions with Add to To-Dos and Add All; one added reads Added
+    /// (the to-do made on the hub) and Add All goes with one left; Regenerate keeps the minutes shown as Updating until the
+    /// next version comes. Light and dark (`-ui.scheme`), then the action items at the largest text.
+    @MainActor func testMinutesActionsBecomeTodosAndRegenerate() throws {
+        let hub = try mockHub()
+        for look in ["light", "dark", "large"] {
+            try minutesMode(hub, "ready") // a fresh start: the sample goes up again and gets version 1
+            let app = XCUIApplication()
+            app.launchArguments = ["-pairURL", pair(hub), "-tab", "assistant", "-openShellPage", "recordings", "-showMeetingSample", "minutes",
+                                   "-ui.scheme", look == "dark" ? "dark" : "light"]
+                + (look == "large" ? ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"] : [])
+            app.launchPinned()
+            XCTAssertTrue(app.buttons["minutes-copy"].waitForExistence(timeout: 45), "\(look): no minutes:\n\(app.debugDescription)")
+            let regenerate = app.buttons["minutes-regenerate"]
+            if look != "large" {
+                scroll(to: regenerate, in: app)
+                XCTAssertTrue(regenerate.isHittable, "\(look): no Regenerate over the minutes:\n\(app.debugDescription)")
+                try shot(app, "minutes-regenerate", look: look)
+            }
+            let addAll = app.buttons["minutes-add-all"]
+            scroll(to: addAll, in: app, swipes: look == "large" ? 30 : 8)
+            XCTAssertTrue(addAll.isHittable, "\(look): no Add All with two left:\n\(app.debugDescription)")
+            let add = app.buttons.matching(identifier: "minutes-add")
+            if look != "large" { XCTAssertEqual(add.count, 2, "\(look): each action item has Add to To-Dos") }
+            try shot(app, "minutes-actions", look: look)
+            if look == "large" {
+                app.swipeDown()
+                try shot(app, "minutes-actions-top", look: look)
+                app.terminate()
+                continue
+            }
+
+            // One added: it reads Added, the to-do is on the hub, and with one left there is no Add All.
+            add.firstMatch.tap()
+            let added = app.descendants(matching: .any)["minutes-added"].firstMatch
+            XCTAssertTrue(added.waitForExistence(timeout: 10), "\(look): not Added:\n\(app.debugDescription)")
+            XCTAssertTrue(wait(5) { !addAll.exists }, "\(look): Add All stays with one left")
+            XCTAssertEqual(add.count, 1)
+            XCTAssertTrue(try todoIDs(hub, past).count == 1, "\(look): no to-do made on the hub")
+            try shot(app, "minutes-added", look: look)
+
+            // Regenerate: the minutes stay, Updating, then the next version (its action items suggestions again).
+            scroll(to: regenerate, in: app, up: true)
+            regenerate.tap()
+            let updating = app.descendants(matching: .any)["minutes-updating"].firstMatch
+            XCTAssertTrue(updating.waitForExistence(timeout: 10), "\(look): no Updating:\n\(app.debugDescription)")
+            XCTAssertTrue(app.buttons["minutes-copy"].exists, "\(look): the minutes went while new ones are written")
+            XCTAssertFalse(regenerate.exists, "\(look): Regenerate offered while they are being written")
+            try shot(app, "minutes-updating", look: look)
+            XCTAssertTrue(updating.waitForNonExistence(timeout: 30), "\(look): the next version never came:\n\(app.debugDescription)")
+            XCTAssertTrue(regenerate.waitForExistence(timeout: 5), "\(look): Regenerate not back")
+            app.terminate()
+        }
+    }
+
     // MARK: Helpers
 
     private func minutesMode(_ hub: String, _ mode: String) throws {
@@ -192,6 +247,24 @@ final class MeetingRecordingUITests: XCTestCase {
 
     @MainActor private func shot(_ app: XCUIApplication, _ name: String) throws {
         try save(app.screenshot().pngRepresentation, name)
+    }
+
+    /// A shot in a look this test chose itself (`-ui.scheme`, or the largest text), named by it.
+    @MainActor private func shot(_ app: XCUIApplication, _ name: String, look: String) throws {
+        guard let dir = ProcessInfo.processInfo.environment["PERSONA_SHOTS"] else { return }
+        try app.screenshot().pngRepresentation.write(to: URL(fileURLWithPath: "\(dir)/meeting-\(look)-\(name).png"))
+    }
+
+    @MainActor private func scroll(to el: XCUIElement, in app: XCUIApplication, swipes: Int = 8, up: Bool = false) {
+        for _ in 0..<swipes where !(el.exists && el.isHittable) { if up { app.swipeDown() } else { app.swipeUp() } }
+    }
+
+    /// The to-dos a recording's action items became on the hub (their `todo_id`).
+    private func todoIDs(_ hub: String, _ id: String) throws -> [String] {
+        let data = try Data(contentsOf: URL(string: hub + "/api/v1/kb/recordings/\(id)")!)
+        let detail = (try JSONSerialization.jsonObject(with: data) as? [String: Any])?["detail"] as? [String: Any]
+        let actions = (detail?["minutes"] as? [String: Any])?["actions"] as? [[String: Any]] ?? []
+        return actions.compactMap { $0["todo_id"] as? String }.filter { !$0.isEmpty }
     }
 
     @MainActor private func screen(_ name: String) throws {
