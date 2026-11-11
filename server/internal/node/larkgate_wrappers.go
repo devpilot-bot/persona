@@ -125,11 +125,17 @@ func unwrapCommand(words []string) ([]string, bool) {
 	return words, true
 }
 
-var commandShells = map[string]bool{"sh": true, "bash": true, "zsh": true, "dash": true, "ksh": true, "fish": true}
+// Direct invocations and applets exposed by busybox use the same shell table.
+var commandShells = map[string]bool{
+	"sh": true, "bash": true, "zsh": true, "dash": true, "ksh": true, "fish": true,
+	"ash": true, "hush": true, "mksh": true, "pdksh": true, "posh": true, "yash": true,
+	"oksh": true, "loksh": true, "csh": true, "tcsh": true, "rbash": true, "rksh": true,
+}
 
 // A shell consumes the word after the option containing c, including -lc and -cl.
+// Match basenames with optional numeric versions, such as ksh93 and bash5.2.
 func shellScriptIndex(words []string) int {
-	if len(words) == 0 || !commandShells[filepath.Base(words[0])] {
+	if len(words) == 0 || !commandShells[strings.TrimRight(filepath.Base(words[0]), "0123456789.")] {
 		return -1
 	}
 	for i := 1; i < len(words); i++ {

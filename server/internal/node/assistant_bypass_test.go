@@ -558,6 +558,62 @@ func TestAssistantBypassWrappedCommands(t *testing.T) {
 	}
 }
 
+// Both approval adapters classify these strings; no tested command is executed.
+func TestAssistantBypassShellNames(t *testing.T) {
+	for _, tc := range []struct {
+		command string
+		cards   int
+	}{
+		{`busybox sh -c "$C"`, 1},
+		{`busybox ash -c "$C"`, 1},
+		{`busybox ash -c 'lark-cli im +messages-send --text hello'`, 1},
+		{`/bin/busybox ash -c "$C"`, 1},
+		{`env busybox ash -c "$C"`, 1},
+		{`sudo -n busybox ash -c "$C"`, 1},
+		{`timeout 5 busybox ash -c "$C"`, 1},
+		{`nice -n 5 busybox ash -c "$C"`, 1},
+		{`sudo -u x env -i nice -n 5 timeout -s KILL 5 busybox ash -c "$C"`, 1},
+		{`busybox ash -c 'eval "$C"'`, 1},
+		{`busybox ash -c 'source "$C"'`, 1},
+		{`sh -c 'busybox ash -c "$C"'`, 1},
+		{`busybox ash -lc "$C"`, 1},
+		{`busybox ash -e -c "$C"`, 1},
+		{`busybox ash -c 'echo hi'`, 0},
+		{`busybox ls`, 0},
+		{`ash -c 'echo hi'`, 0},
+		{`env FOO=1 go test ./...`, 0},
+		{`ash-helper -c "$C"`, 0},
+		{`bashful -c "$C"`, 0},
+	} {
+		t.Run(tc.command, func(t *testing.T) { assertAssistantBypassClassification(t, tc.command, tc.cards) })
+	}
+	for _, shell := range []string{
+		"sh", "bash", "zsh", "dash", "ksh", "fish", "ash", "hush", "mksh", "pdksh",
+		"posh", "yash", "oksh", "loksh", "csh", "tcsh", "rbash", "rksh",
+	} {
+		for _, executable := range []string{shell, "/bin/" + shell, shell + "93", "/usr/bin/" + shell + "5.2"} {
+			for _, prefix := range []string{"", "busybox "} {
+				for _, tc := range []struct {
+					args  string
+					cards int
+				}{
+					{` -c "$C"`, 1},
+					{` -lc "$C"`, 1},
+					{` -e -c "$C"`, 1},
+					{` -c 'eval "$C"'`, 1},
+					{` -c 'lark-cli im +messages-send --text hello'`, 1},
+					{` -c 'echo hi'`, 0},
+					{` -c 'echo "$C"'`, 0},
+					{` -c 'lark-cli docs +fetch'`, 0},
+				} {
+					command := prefix + executable + tc.args
+					t.Run(command, func(t *testing.T) { assertAssistantBypassClassification(t, command, tc.cards) })
+				}
+			}
+		}
+	}
+}
+
 func assertAssistantBypassClassification(t *testing.T, command string, cards int) {
 	t.Helper()
 
