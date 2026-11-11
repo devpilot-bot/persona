@@ -21,8 +21,9 @@ Decided for the first version (#4741); each changes only with a new decision the
 
 1. **Transcription stays on the phone**, offline (`SpeechAnalyzer` / `SpeechTranscriber`, as recordings do today).
    The hub receives text only, never audio.
-2. **Raw audio lives only on the user's devices**: deleted 3 days after the day's final recap, and in any case 7 days
-   after the day (or after `recording_days`, when shorter), on every device ("Retention and privacy").
+2. **Raw audio lives only on the user's devices**: on the phone it is deleted 3 days after the day's final recap; on
+   every device it is gone at most 7 days after the day (or `recording_days`, when shorter). The watch keeps only
+   audio the phone has not acknowledged yet ("Retention and privacy").
 3. **The transcript follows `recording_days`** (14 days by default); **the recap follows `minutes_days`** (forever by
    default) and survives trimming like minutes do.
 4. **The recap joins the 21:30 evening routine** as a facts section, and also gets one push a day when it is ready,
