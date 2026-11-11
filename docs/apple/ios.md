@@ -527,7 +527,7 @@ Inspired by dot and ChatGPT App (user-provided screenshots). Code in `Persona/Vi
   Main chat is the first row (avatar App icon + Persona, identical to the new-shell drawer, #2004 / #5110), then a separator; actions below: New chat, Scheduled tasks, Knowledge, Health (icon + text, no cards; Health in `docs/assistant/health.md` ("iOS and Mac entry points")); separator; Pinned (main chat excluded;
   long-press other chats to pin, stored locally in `assistant.pinned`) and Recent (remaining chats newest first, first 30 then View all), each with gray ⋯ at the title's right
   (Pinned: Unpin all; Recent: New chat, View all). Each row has one circular marker (pale chat bubble color chosen by session id, adjacent rows different) + one-line title,
-  with a right-side status dot only for Needs you / Unread / Working; the last message appears only in long-press preview. Current chat has a rounded gray background. Bottom row: avatar + name + Online / Offline and machine
+  with a right-side state mark only for Needs you / Unread / Working (`RowStateMark`: a blue dot, a green dot, the amber spinner; the same mark on the main chat's row, the automatic chats' rows and `AutoConversationsView`, #4538); the last message appears only in long-press preview. Current chat has a rounded gray background. Bottom row: avatar + name + Online / Offline and machine
   (tap for profile), Settings on the right (drawer only; split mode has the tab bar beside it). Search lists only results (N chats). Long-press also copies session ID or ends the chat.
   **Automatic chats** (#3264, `AutoConversations`): when the hub reports origins (`conversation_origin`, session `origin`, `docs/protocol/protocol.md` ("Origin of assistant chats")),
   Recent lists only the user's own (`user` / `channel` / absent); Inbox AI twin, scheduled tasks, Lark /agent, derived chats and extension-created chats fold into the first row below Recent, "Automatic chats N",
@@ -1129,8 +1129,10 @@ iOS, Mac, visionOS, watch and extensions support Simplified Chinese, English and
   - Call icons `voiceMute` / `voiceUnmute` (same crossed mic, filled unmute, Phone-like toggle), `voiceEnd` (`Theme.danger`), `voiceCaptions` full captions, `voiceTimbre` voice; entry `voiceChannel`.
   - Mac continuous clocks relayout whole window each frame (`docs/lessons/macos.md`); no Mac voice yet, future animation Core Animation.
 - One badge/count recipe (`Components.swift`): noninteractive `Chip` neutral (gray/pale: model/version/tab/direct chat),
-  tinted (meaning + pale fill: `.tone` state, @me red, Recommended AI purple), outlined (Claude/Codex kind); `CountBadge` white on
-  gray `Theme.countBadge` or accent, or state text on tint, 99+ over 99. Interactive filters/tabs/modes/sub-Agents are controls, not these.
+  tinted (meaning + pale fill: `.tone` state, @me red, Recommended AI purple), outlined (Claude/Codex kind); `CountBadge` in the web's three looks (#4538):
+  `.needs` (Needs you's text on its tint) for what waits for the user, `.neutral` (white on gray `Theme.countBadge`, the default) for a passive total,
+  `.accent` (white on accent) for a mention or the selected item. Nothing at 0, 99+ over 99 (`CountBadge.text`, also for the tab and pane badges that are
+  strings), VoiceOver reads the exact number or the host's `label`. Interactive filters/tabs/modes/sub-Agents are controls, not these.
 - BeautifulUI (`apple/Packages/BeautifulUI`, vendored copy, source/update in `VENDORED.md`, no local library edits):
   **BeautifulUI style only** (`AppStyle.usesBeautifulUI`, Liquid Glass surfaces/theme colors), other styles retain Persona thinking/tool/work/input UI.
   Direct replacement 2026-10-30 (#93/#94) judged ugly by user, reverted and made this theme. In it:

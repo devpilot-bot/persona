@@ -1182,7 +1182,7 @@ struct AssistantSidebar: View {
                     Text("Main Chat").font(Theme.Font.body).foregroundStyle(Color.primary).lineLimit(1)
                 }
                 Spacer(minLength: 0)
-                if let main { mark(main) }
+                if let main { RowStateMark(state: main.state) }
             }
             .padding(.horizontal, Theme.Space.m)
             .padding(.vertical, Theme.Sidebar.rowPadding)
