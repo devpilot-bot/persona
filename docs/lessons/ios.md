@@ -153,6 +153,14 @@ from colliding with its buttons.
   changes it was not found. Don't try
   to reproduce the chat's line breaker: `Text.Layout.Run.characterIndices` (UTF-16 offsets) says where each of the chat's lines starts, and
   `shouldBreakLineByWordBeforeCharacterAt` holds TextKit to those places (`WordBreaks`, `LiftLayout.follow`).
+- **MarkdownUI draws every font at a whole point.** It sizes a run as `round(size × scale)`, so inline code at 0.88 em of 17 is 15, not
+  14.96, and the first heading at 1.3 em is 22. A text view laid out to match it at the unrounded size ended a line of code most of a
+  point short. Size em values with `ReplyMetrics.points`.
+- **Laid out in Chinese, TextKit 1 handles a CJK closing bracket at a line's end differently from SwiftUI.** In a zh-Hans app both compress
+  CJK punctuation, and TextKit 2 matches SwiftUI glyph for glyph. TextKit 1 draws a line-ending 」 or ） about 3 pt narrower and starts the next
+  line half an em in (a little in, before an opening bracket). Lines ending in ，。、”： match. `LiftUITextView.wrappedStart` measures how
+  far a wrapped line starts past its indent and `LineSnap` moves it back; the narrower bracket stays (the highlight of a whole line
+  reaches the words' edge anyway).
 - A `UIScrollView` subclass cannot have a property named `dragging`: its Objective-C getter is `isDragging`'s, and the override fails.
   `Layout` methods are not on the main actor: what they write must be `nonisolated`.
 - **UIKit only scrolls a text view's own content while a selection handle is held at its edge.** With `isScrollEnabled = false` inside a

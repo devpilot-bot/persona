@@ -46,6 +46,10 @@ nonisolated enum ReplyMetrics {
     /// Inline code, and an agent's words between its steps (`QuietMarkdown`), em.
     static let inlineCode: CGFloat = 0.88
     static let quiet: CGFloat = 0.88
+
+    /// A size in em as the chat draws it: MarkdownUI sets every run's font at a whole point (`round(size × scale)`),
+    /// so inline code at 0.88 em of 17 is 15, not 14.96. Over a line of code the difference came to most of a point (#3188).
+    static func points(_ em: CGFloat, of size: CGFloat) -> CGFloat { (em * size).rounded() }
 }
 
 /// What starts selecting a lifted message's words: a long press on them at a point (in the window), or Select Text
@@ -350,6 +354,7 @@ final class LiftUITextView: UITextView, UITextViewDelegate, UIEditMenuInteractio
         let all = NSRange(location: 0, length: storage.length)
         snapper.targets = [:]
         snapper.hidden = []
+        snapper.shifts = [:]
         (snapper.held, snapper.breaks) = LiftLayout.follow(texts, paragraphs: wrapping)
         layout.invalidateLayout(forCharacterRange: all, actualCharacterRange: nil)
         guard !rows.isEmpty, storage.length > 0 else { return }
@@ -358,11 +363,13 @@ final class LiftUITextView: UITextView, UITextViewDelegate, UIEditMenuInteractio
         var starts: [Int] = []
         var lines: [LiftLayout.SnapLine] = []
         var codes: Set<Int> = []
+        var shifts: [Int: CGFloat] = [:]
         layout.enumerateLineFragments(forGlyphRange: layout.glyphRange(for: textContainer)) { rect, _, _, range, _ in
             let chars = self.layout.characterRange(forGlyphRange: range, actualGlyphRange: nil)
             let s = text.substring(with: chars)
             guard s.contains(where: { !$0.isWhitespace }) else { return }
             starts.append(range.location)
+            shifts[range.location] = self.wrappedStart(rect, range, chars.location, text)
             let block = self.storage.attribute(.replyBlock, at: chars.location, effectiveRange: nil) as? ReplyBlock
             let id = block.map { ObjectIdentifier($0).hashValue }
             // A code block's first line, under its title bar: on the chat's next line, wherever the bar put it.
@@ -373,10 +380,23 @@ final class LiftUITextView: UITextView, UITextViewDelegate, UIEditMenuInteractio
         let reach = UIFont.preferredFont(forTextStyle: .body, compatibleWith: traitCollection).pointSize * 0.6
         let snapped = LiftLayout.snap(lines, to: rows, folds: folds, reach: reach)
         snapper.targets = Dictionary(zip(starts, snapped.map(\.at)), uniquingKeysWith: { a, _ in a })
+        snapper.shifts = shifts
         snapper.hidden = Set(zip(starts, snapped).filter { $0.1.hidden }.map(\.0))
         layout.invalidateLayout(forCharacterRange: all, actualCharacterRange: nil)
         layout.ensureLayout(for: textContainer)
         setNeedsDisplay()
+    }
+
+    /// How far back a wrapped line goes to start at its paragraph's indent, as the chat's does; nil: it does. Laid out
+    /// in Chinese (the app's language), TextKit 1 starts the line after one that ends in a closing bracket (」, ）) half
+    /// an em in, and one that starts with an opening bracket a little; SwiftUI (and TextKit 2) at the indent.
+    private func wrappedStart(_ rect: CGRect, _ glyphs: NSRange, _ first: Int, _ text: NSString) -> CGFloat? {
+        guard first > 0, first < text.length,
+              let before = UnicodeScalar(text.character(at: first - 1)), !CharacterSet.newlines.contains(before) else { return nil }
+        let indent = (storage.attribute(.paragraphStyle, at: first, effectiveRange: nil) as? NSParagraphStyle)?.headIndent ?? 0
+        let size = (storage.attribute(.font, at: first, effectiveRange: nil) as? UIFont)?.pointSize ?? 0
+        let past = rect.minX + layout.location(forGlyphAt: glyphs.location).x - indent
+        return past > 0.5 && past <= size * 0.6 ? -past : nil
     }
 
     /// Its paragraphs that wrap as words, a list item's past its marker: not a code block's lines (which do not
@@ -607,6 +627,8 @@ extension LiftLines {
     static func lines(of v: UITextView, layout: NSLayoutManager) -> String {
         guard on else { return "" }
         let c = v.textContainer, inset = v.textContainerInset
+        let edge = v.convert(CGPoint(x: v.bounds.maxX - inset.right, y: 0), to: nil).x
+        if shared.edge != edge { shared.edge = edge }
         layout.ensureLayout(for: c)
         var out: [Line] = []
         let text = v.textStorage
@@ -629,9 +651,11 @@ extension LiftLines {
             let at = layout.location(forGlyphAt: first)
             func right(_ g: Int) -> CGFloat { layout.boundingRect(forGlyphRange: NSRange(location: g, length: 1), in: c).maxX }
             let p = v.convert(CGPoint(x: inset.left + rect.minX + at.x, y: inset.top + rect.minY + at.y), to: nil)
-            let x1 = v.convert(CGPoint(x: inset.left + right(last), y: 0), to: nil).x
-            let w1 = word >= 0 ? v.convert(CGPoint(x: inset.left + right(word), y: 0), to: nil).x : x1
-            out.append((n, p.x, p.y, x1, w1))
+            // A code line longer than the box runs on under its edge, as the chat's does.
+            let x1 = min(v.convert(CGPoint(x: inset.left + right(last), y: 0), to: nil).x, edge)
+            let w1 = word >= 0 ? min(v.convert(CGPoint(x: inset.left + right(word), y: 0), to: nil).x, edge) : x1
+            let end = text.attributedSubstring(from: NSRange(location: layout.characterIndexForGlyph(at: last), length: 1)).string.unicodeScalars.first
+            out.append((n, p.x, p.y, x1, w1, end.map(Self.closesCJK) ?? false))
         }
         return encode(out)
     }
@@ -722,6 +746,9 @@ nonisolated final class LineSnap: NSObject, NSLayoutManagerDelegate {
     /// Where the chat's lines break (`LiftLayout.follow`): in `held`, a line breaks only before a character in `breaks`.
     var held = IndexSet()
     var breaks = IndexSet()
+    /// Wrapped lines (by their first glyph) TextKit started past their paragraph's indent, and how far back they go
+    /// (`LiftUITextView.wrappedStart`).
+    var shifts: [Int: CGFloat] = [:]
 
     func layoutManager(_ layoutManager: NSLayoutManager, shouldBreakLineByWordBeforeCharacterAt charIndex: Int) -> Bool {
         !held.contains(charIndex) || breaks.contains(charIndex)
@@ -730,10 +757,12 @@ nonisolated final class LineSnap: NSObject, NSLayoutManagerDelegate {
     func layoutManager(_ layoutManager: NSLayoutManager, shouldSetLineFragmentRect lineFragmentRect: UnsafeMutablePointer<CGRect>,
                        lineFragmentUsedRect: UnsafeMutablePointer<CGRect>, baselineOffset: UnsafeMutablePointer<CGFloat>,
                        in textContainer: NSTextContainer, forGlyphRange glyphRange: NSRange) -> Bool {
-        guard let target = targets[glyphRange.location] else { return false }
-        let dy = target - (lineFragmentRect.pointee.origin.y + baselineOffset.pointee)
-        guard abs(dy) > 0.01 else { return false }
+        let dx = shifts[glyphRange.location] ?? 0
+        let dy = targets[glyphRange.location].map { $0 - (lineFragmentRect.pointee.origin.y + baselineOffset.pointee) } ?? 0
+        guard abs(dx) > 0.01 || abs(dy) > 0.01 else { return false }
+        lineFragmentRect.pointee.origin.x += dx
         lineFragmentRect.pointee.origin.y += dy
+        lineFragmentUsedRect.pointee.origin.x += dx
         lineFragmentUsedRect.pointee.origin.y += dy
         return true
     }
@@ -790,9 +819,9 @@ enum ReplyText {
             case .plain(let c): color = UIColor(c)
             case .reply(let q): quiet = q; color = q ? .secondaryLabel : .label
             }
-            body = quiet ? base.withSize(base.pointSize * ReplyMetrics.quiet) : base
-            code = .monospacedSystemFont(ofSize: body.pointSize * Theme.Level.code.size / Theme.Level.body.size, weight: .regular)
-            inlineCode = .monospacedSystemFont(ofSize: body.pointSize * ReplyMetrics.inlineCode, weight: .regular)
+            body = quiet ? base.withSize(ReplyMetrics.points(ReplyMetrics.quiet, of: base.pointSize)) : base
+            code = .monospacedSystemFont(ofSize: ReplyMetrics.points(Theme.Level.code.size / Theme.Level.body.size, of: body.pointSize), weight: .regular)
+            inlineCode = .monospacedSystemFont(ofSize: ReplyMetrics.points(ReplyMetrics.inlineCode, of: body.pointSize), weight: .regular)
             quoteMarkRoom = UIFontMetrics(forTextStyle: .caption1).scaledValue(for: Theme.Space.xl, compatibleWith: traits)
             link = UIColor(Theme.accent)
             secondaryInk = UIColor(Theme.Reply.secondaryInk)
@@ -975,9 +1004,9 @@ enum ReplyText {
                         : level == 2 ? ReplyMetrics.heading2 : level == 3 ? ReplyMetrics.heading3
                         : (top: ReplyMetrics.heading4.top, bottom: ReplyMetrics.heading4.bottom)
                     blocks.append(Block(top: m.top, bottom: m.bottom))
-                    let font: UIFont = level == 1 ? look.weight(look.body.withSize(look.size * ReplyMetrics.heading1.size), .bold)
+                    let font: UIFont = level == 1 ? look.weight(look.body.withSize(ReplyMetrics.points(ReplyMetrics.heading1.size, of: look.size)), .bold)
                         : level <= 3 ? look.weight(look.body, .semibold)
-                        : look.weight(look.body.withSize(look.size * ReplyMetrics.heading4.size), .semibold)
+                        : look.weight(look.body.withSize(ReplyMetrics.points(ReplyMetrics.heading4.size, of: look.size)), .semibold)
                     add(inline(title, font: font, color: level > 3 ? look.secondaryInk : nil), in: blocks.count - 1)
                     open = nil
                     levels = []
@@ -1049,7 +1078,7 @@ enum ReplyText {
                 s.lineBreakMode = .byClipping // the chat's code scrolls sideways, its lines whole
                 s.firstLineHeadIndent = Theme.Space.m
                 s.headIndent = Theme.Space.m
-                s.tailIndent = -Theme.Space.m
+                // No room on the right: the box's padding scrolls with the code, so a long line runs on to its edge.
             }
             lines[lines.count - 1].ending = attrs
         }
@@ -1200,7 +1229,7 @@ enum ReplyText {
                 var f = font
                 var attrs: [NSAttributedString.Key: Any] = [.foregroundColor: color]
                 if intent.contains(.code) {
-                    f = look.inlineCode.withSize(font.pointSize * ReplyMetrics.inlineCode)
+                    f = look.inlineCode.withSize(ReplyMetrics.points(ReplyMetrics.inlineCode, of: font.pointSize))
                     attrs[.backgroundColor] = UIColor(Theme.inlineCodeBackground)
                 }
                 if intent.contains(.stronglyEmphasized) { f = look.weight(f, .semibold) }

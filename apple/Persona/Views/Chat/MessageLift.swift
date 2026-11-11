@@ -401,7 +401,9 @@ extension EnvironmentValues {
 /// For the UI tests (#3188), with `-showLiftLines YES`: where each line of a pressed message's words is drawn in the chat,
 /// in its lifted copy, and in the text view over that copy while its words are selected, for a test to check that
 /// nothing moves. A line: its glyphs, its first glyph's left edge, its baseline, its last glyph's right edge (and for the
-/// text view, the last one that is not a space's), in the window, at a tenth of a point.
+/// text view, the last one that is not a space's, both no further than its right edge, `edge`, and whether its last
+/// character is a CJK closing bracket: TextKit 1 draws that one narrower than SwiftUI at a line's end), in the window,
+/// at a tenth of a point.
 @Observable final class LiftLines {
     static let shared = LiftLines()
     static let on = UserDefaults.standard.bool(forKey: "showLiftLines")
@@ -409,19 +411,24 @@ extension EnvironmentValues {
     var chat: [String: String] = [:]
     var lift = ""
     var select = ""
+    /// The text view's right edge, in the window.
+    var edge: CGFloat = 0
 
-    typealias Line = (glyphs: Int, minX: CGFloat, baseline: CGFloat, maxX: CGFloat, wordsMaxX: CGFloat)
+    typealias Line = (glyphs: Int, minX: CGFloat, baseline: CGFloat, maxX: CGFloat, wordsMaxX: CGFloat, closes: Bool)
 
     static func encode(_ lines: [Line]) -> String {
         lines.sorted { ($0.baseline, $0.minX) < ($1.baseline, $1.minX) }
-            .map { String(format: "%ld,%.1f,%.1f,%.1f,%.1f", $0.glyphs, $0.minX, $0.baseline, $0.maxX, $0.wordsMaxX) }
+            .map { String(format: "%ld,%.1f,%.1f,%.1f,%.1f,%ld", $0.glyphs, $0.minX, $0.baseline, $0.maxX, $0.wordsMaxX, $0.closes ? 1 : 0) }
             .joined(separator: ";")
     }
 
     /// The lines a view shows (`ShownWords.shown`), in the window: its origin there is `at`.
     static func lines(_ shown: [WordLine], at o: CGPoint) -> String {
-        encode(shown.map { ($0.glyphs, o.x + $0.minX, o.y + $0.baseline, o.x + $0.maxX, o.x + $0.maxX) })
+        encode(shown.map { ($0.glyphs, o.x + $0.minX, o.y + $0.baseline, o.x + $0.maxX, o.x + $0.maxX, false) })
     }
+
+    /// A CJK closing bracket (」, ）, 】…).
+    static func closesCJK(_ c: UnicodeScalar) -> Bool { c.properties.generalCategory == .closePunctuation && c.value >= 0x3000 }
 }
 
 /// Writes where the lines of the texts under it are (`LiftLines`).
@@ -507,7 +514,7 @@ private struct LiftedMessage: View {
             if LiftLines.on {
                 let l = LiftLines.shared
                 Color.clear.allowsHitTesting(false).accessibilityElement().accessibilityIdentifier("lift-lines")
-                    .accessibilityValue("chat=\(l.chat[lift.bar.id] ?? "")|lift=\(l.lift)|select=\(selecting ? l.select : "")")
+                    .accessibilityValue("chat=\(l.chat[lift.bar.id] ?? "")|lift=\(l.lift)|edge=\(String(format: "%.1f", l.edge))|select=\(selecting ? l.select : "")")
             }
             #endif
             backdrop
