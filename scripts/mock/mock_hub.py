@@ -2654,6 +2654,22 @@ def recording_minutes_next(rid):
     detail.setdefault("meta", {})["minutes_state"] = "ready"
 
 
+def recording_when(body):
+    """`when` as the hub writes it (server/internal/kb/minutes.go `minutesWhen`): the recording's own start to its end
+    (`duration`, or `ended_at` when later; at least a minute) in the local zone, the end's date too when it is another day."""
+    def at(v):
+        try: return datetime.fromisoformat(str(v).replace("Z", "+00:00")).astimezone()
+        except (TypeError, ValueError): return None
+    start = at(body.get("started_at"))
+    if not start: return None
+    end = start + timedelta(seconds=float(body.get("duration") or 0))
+    ended = at(body.get("ended_at"))
+    if ended and ended > end: end = ended
+    end = max(end, start + timedelta(minutes=1))
+    same = start.date() == end.date()
+    return start.strftime("%Y-%m-%d %H:%M") + "–" + end.strftime("%H:%M" if same else "%Y-%m-%d %H:%M")
+
+
 def recording_minutes(body):
     """Made-up minutes in the contract's shape (docs/assistant/meeting-minutes.md) from a recording's own sentences: the
     first two are points, those that decide / assign / leave something open are decisions / actions / open questions.
@@ -2665,7 +2681,7 @@ def recording_minutes(body):
     out = {
         "version": 1,
         "title": cal.get("title") or body.get("title") or None,
-        "when": "2027-01-15 16:00–17:00",
+        "when": recording_when(body),
         "where": cal.get("location"),
         "attendees": cal.get("attendees"),
         "points": [item(x) for x in segs[:2]],

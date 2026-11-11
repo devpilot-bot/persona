@@ -5,6 +5,7 @@ twice; an old version is 409 minutes_stale. POST …/minutes keeps the minutes s
 """
 import time
 import unittest
+from datetime import datetime, timedelta
 import uuid
 
 from test_meeting_attendance_mock import Hub, start
@@ -29,6 +30,9 @@ class RecordingMinutesTodosMockTests(Hub, unittest.TestCase):
     def test_actions_become_todos_once(self):
         rid = self.meeting()
         m = self.minutes(rid)["minutes"]
+        # `when` as the hub writes it: the recording's own start in the local zone, and at least a minute.
+        start = datetime.fromisoformat("2026-11-10T14:00:00+08:00").astimezone()
+        self.assertEqual(m["when"], start.strftime("%Y-%m-%d %H:%M") + "–" + (start + timedelta(minutes=1)).strftime("%H:%M"))
         self.assertEqual((m["version"], [a["id"] for a in m["actions"]], m["actions"][0]["todo_id"]), (1, ["a1", "a2"], ""))
         path = f"/api/v1/recordings/{rid}/minutes/todos"
         status, out = self.call("POST", path, {"version": 1, "actions": ["a1"]})
