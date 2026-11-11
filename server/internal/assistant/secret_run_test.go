@@ -737,7 +737,7 @@ func forgedCard(id string) proto.Interaction {
 // forgedHandoffCard is a card from outside the manager's Agent start that calls itself the hand-off card.
 func forgedHandoffCard(id string) proto.Interaction {
 	input, _ := json.Marshal(proto.SecretHandoffInput{Variables: []proto.SecretHandoffVariable{
-		{Name: "GITHUB_TOKEN", Provider: "vault", Reference: "op://Dev/GitHub/credential"}}})
+		{Name: "GITHUB_TOKEN", Provider: "vault", Title: "GitHub › credential"}}})
 	return proto.Interaction{ID: id, MachineID: "mac", SessionID: "s1", Kind: proto.IxPermission, ToolName: proto.SecretHandoffTool,
 		ToolInput: input, CreatedAt: time.Now().UTC(), ExpiresAt: time.Now().Add(time.Hour).UTC()}
 }

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
@@ -15,21 +16,64 @@ import (
 )
 
 // The hand-off card's gate (docs/extensions/secret-providers.md "Who may approve a hand-off"). A hand-off card
-// (proto.SecretHandoffTool) hands secret values to one Agent run once it is approved, so only a full device whose app
-// shows the card may approve it: one whose client declared featureSecretHandoff (client_hello's features, or the
-// request's X-Persona-Features; requestWants). An answer-only device (the watch), an extension's token, the hub's own
-// token and an app that does not show the card (Android, the Mac app, an older app) get 403 secret_handoff_elsewhere,
-// and each refusal is recorded on every provider the card names (extwire.AuditSecretHandoffRefused). A plain no (deny,
+// (proto.SecretHandoffTool) hands secret values to one Agent run once it is approved, so only a full device approves it,
+// from the card itself: the approval request declares featureSecretHandoff in its own X-Persona-Features header
+// (requestDeclares; a connection's client_hello does not count, or every request of that app, a lock-screen button's
+// included, would). An answer-only device (the watch), an extension's token, the hub's own token and a request without
+// the feature (Android, the Mac app, an older app, a notification's or a widget's button) get 403
+// secret_handoff_elsewhere, and the refusal is recorded on every provider the card names
+// (extwire.AuditSecretHandoffRefused), once per card, credential and reason in handoffRecordEvery. A plain no (deny,
 // dismiss, cancel: proto.SecretHandoffDeclines) goes through from any of them.
+//
+// The feature is the client's word: it keeps a client that does not show the card from approving one blindly. It is no
+// boundary between the owner's own full credentials, any of which may do whatever the owner may.
 //
 // The device that may approve goes to the manager in HTTPRequest.HandoffApprover, never in a header, on an answer to a
 // hand-off card and on one to a card the hub does not hold (after a restart, before the manager reported its cards
 // again): the manager approves a hand-off only with it, so it checks the cards the hub could not. A card's push never
-// offers buttons (interactionPayloadIn): a tap opens the card.
+// offers buttons (interactionPayloadIn), and the Live Activity shows it without Allow / Deny (assistant/fleet_live.go).
 
-// featureSecretHandoff: the client shows the hand-off card whole (what is handed over, from where, to which Agent on
-// which computer) and approves it only from that card, never from a notification, a widget, the watch or Siri.
+// featureSecretHandoff: the request approving a hand-off card comes from the card itself, which its client shows whole
+// (what is handed over, from where, to which Agent on which computer). A client sends it on that request only, never in
+// a header every request carries, nor from a notification, a widget, the Live Activity, the watch or Siri.
 const featureSecretHandoff = "secret_handoff"
+
+// handoffRecordEvery: a refusal of the same card, credential and reason is recorded once in this long; handoffRecordMost
+// bounds what is remembered.
+const (
+	handoffRecordEvery = 10 * time.Minute
+	handoffRecordMost  = 1024
+)
+
+// handoffRecorded remembers the refusals recorded lately, so one credential trying again and again fills no audit log.
+type handoffRecorded struct {
+	mu   sync.Mutex
+	seen map[string]time.Time
+}
+
+// first reports whether key was not recorded in the last handoffRecordEvery, and remembers it now.
+func (m *handoffRecorded) first(key string, now time.Time) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if at, ok := m.seen[key]; ok && now.Sub(at) < handoffRecordEvery {
+		return false
+	}
+	if len(m.seen) >= handoffRecordMost {
+		for k, at := range m.seen {
+			if now.Sub(at) >= handoffRecordEvery {
+				delete(m.seen, k)
+			}
+		}
+		if len(m.seen) >= handoffRecordMost {
+			return false
+		}
+	}
+	if m.seen == nil {
+		m.seen = map[string]time.Time{}
+	}
+	m.seen[key] = now
+	return true
+}
 
 // Why a request may not approve a hand-off card (the record's reason).
 const (
@@ -54,7 +98,7 @@ func (h *Hub) handoffApprover(r *http.Request) (assistantwire.HandoffApprover, s
 		return assistantwire.HandoffApprover{}, handoffRole
 	case p.ID == "":
 		return assistantwire.HandoffApprover{}, handoffHubToken
-	case !h.requestWants(r, featureSecretHandoff):
+	case !requestDeclares(r, featureSecretHandoff):
 		return assistantwire.HandoffApprover{}, handoffClient
 	}
 	return assistantwire.HandoffApprover{DeviceID: p.ID, DeviceName: p.Name}, ""
@@ -87,8 +131,8 @@ func handoffApproverOf(ctx context.Context) *assistantwire.HandoffApprover {
 }
 
 // refuseHandoff answers 403 to an approval of hand-off card ix that r may not give (why), and has the card's manager
-// record it on each provider the card names: who tried, from which role, on which card. Nothing of what the card
-// hands over (variables, references) is in it.
+// record it on each provider the card names (once in handoffRecordEvery): who tried, from which role, on which card.
+// Nothing of what the card hands over (variables, items) is in it.
 func (h *Hub) refuseHandoff(w http.ResponseWriter, r *http.Request, ix proto.Interaction, why string) {
 	p := principalOf(r.Context())
 	actor := "hub token"
@@ -102,6 +146,11 @@ func (h *Hub) refuseHandoff(w http.ResponseWriter, r *http.Request, ix proto.Int
 		"session_id": rowText(ix.SessionID, 128), "role": p.Role, "reason": why}
 	if p.Name != "" && p.Role != roleExtension {
 		detail["device_name"] = rowText(p.Name, 128)
+	}
+	defer writeErrCode(w, http.StatusForbidden, proto.CodeSecretHandoffElsewhere,
+		errors.New(i18n.T(h.requestLang(r), "hub-secret_handoff.approve_elsewhere")))
+	if !h.handoffRecorded.first(ix.ID+"\x00"+actor+"\x00"+why, time.Now()) {
+		return // recorded lately
 	}
 	h.logf("hand-off card %s: an approval from %s refused (%s)", clip(ix.ID, 64), clip(actor, 96), why)
 	providers := handoffProviders(ix)
@@ -117,8 +166,6 @@ func (h *Hub) refuseHandoff(w http.ResponseWriter, r *http.Request, ix proto.Int
 			h.logf("hand-off card %s: the refusal is not recorded on %s: %v", clip(ix.ID, 64), clip(prov, 64), err)
 		}
 	}
-	writeErrCode(w, http.StatusForbidden, proto.CodeSecretHandoffElsewhere,
-		errors.New(i18n.T(h.requestLang(r), "hub-secret_handoff.approve_elsewhere")))
 }
 
 // handoffProviders are the providers hand-off card ix names, each once, at most proto.SecretEnvMost.

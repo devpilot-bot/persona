@@ -485,6 +485,9 @@ func (h *Manager) hubCall(ctx context.Context, method string, params json.RawMes
 		}
 		actor := "extension:" + au.Extension
 		if au.Action == extwire.AuditSecretHandoffRefused { // the provider's record of someone else's try
+			if !h.extensions.isSecretProvider(au.Extension) {
+				return nil, &rpc.Error{Code: bus.CodeInvalidParams, Message: "extensions: " + au.Extension + " is no secret provider here"}
+			}
 			actor = handoffActor(au.Actor)
 		}
 		h.audit(ctx, au.Extension, au.Action, actor, au.Detail)
@@ -728,6 +731,15 @@ func (h *Manager) extensionLooks() []extwire.LookPackage {
 		}
 	})
 	return out
+}
+
+// isSecretProvider: id is an installed extension that contributes a secret provider, switched on or not.
+func (ps *extensions) isSecretProvider(id string) bool {
+	if ps == nil || ps.reg == nil {
+		return false
+	}
+	p := ps.reg.Snapshot(id)
+	return p != nil && p.Manifest != nil && len(p.Manifest.SecretProviders()) > 0
 }
 
 // handoffActor is who the hub says tried to approve a hand-off card, as the other records name an actor ("device:<id>",

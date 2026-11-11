@@ -3,11 +3,13 @@ package hub
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
@@ -67,23 +69,24 @@ func (m *handoffManager) took() ([]assistantwire.HTTPRequest, []extwire.Audit, [
 	return r, a, raw
 }
 
-// handoffCard is a hand-off card of two providers' values (one named twice); its references end in a marker that no
+// handoffCard is a hand-off card of two providers' values (one named twice); its items' titles end in a marker that no
 // record may carry.
 func handoffCard(id, kind string) proto.Interaction {
 	input, _ := json.Marshal(proto.SecretHandoffInput{Variables: []proto.SecretHandoffVariable{
-		{Name: "GITHUB_TOKEN", Provider: "vault", Reference: "op://Dev/GitHub/credential-REFMARK"},
-		{Name: "NPM_TOKEN", Provider: "vault", Reference: "op://Dev/npm/credential-REFMARK"},
-		{Name: "CLOUD_KEY", Provider: "keys", Reference: "keys://cloud-REFMARK"},
+		{Name: "GITHUB_TOKEN", Provider: "vault", Title: "GitHub › credential REFMARK"},
+		{Name: "NPM_TOKEN", Provider: "vault", Title: "npm › credential REFMARK"},
+		{Name: "CLOUD_KEY", Provider: "keys", Title: "cloud REFMARK"},
 	}})
 	return proto.Interaction{ID: id, MachineID: "box", SessionID: "s1", Kind: kind, ToolName: proto.SecretHandoffTool,
 		ToolInput: input, Summary: "Approve on iPhone or the web"}
 }
 
-// Only a full device whose app shows the hand-off card approves one: the watch, the hub's own token and an app that
-// does not declare the card get 403 secret_handoff_elsewhere, each refusal recorded on every provider the card names
-// (who, which role, why; never what it hands over), and the card stays pending. A plain no goes through from any of
-// them. The device that may approve reaches the manager outside the headers, on a hand-off card and on a card the hub
-// does not hold, and on no other card.
+// Only a full device approves a hand-off card, by a request that declares the card's feature itself: the watch, the hub's
+// own token, a request without the feature and one whose app declared it only on its connection get 403
+// secret_handoff_elsewhere, each refusal recorded once on every provider the card names (who, which role, why; never
+// what it hands over), and the card stays pending. A plain no goes through from any of them. The device that may
+// approve reaches the manager outside the headers, on a hand-off card and on a card the hub does not hold, and on no
+// other card.
 func TestOnlyADeviceThatShowsTheHandoffCardApprovesIt(t *testing.T) {
 	h := newTestHub(t)
 	h.store = &tokenStore{memStore: *newMemStore(), rows: map[string]db.DeviceToken{}, rev: map[string]bool{}}
@@ -123,6 +126,7 @@ func TestOnlyADeviceThatShowsTheHandoffCardApprovesIt(t *testing.T) {
 	}
 	shows := []string{featuresHeader, "persona_card_ring, " + featureSecretHandoff}
 
+	recorded := map[string]bool{}
 	for _, c := range []struct {
 		name, tok, body, reason, actor, device string
 		header                                 []string
@@ -130,6 +134,8 @@ func TestOnlyADeviceThatShowsTheHandoffCardApprovesIt(t *testing.T) {
 		{"an app that does not show the card", phoneTok, `{"allow":true}`, handoffClient, "device:" + phoneID, "iPhone", nil},
 		{"an app that shows other cards", phoneTok, `{"allow":true}`, handoffClient, "device:" + phoneID, "iPhone",
 			[]string{featuresHeader, "persona_card_ring, elicitation"}},
+		{"the feature in another header", phoneTok, `{"allow":true}`, handoffClient, "device:" + phoneID, "iPhone",
+			[]string{"X-Persona-Feature", featureSecretHandoff}},
 		{"the watch", watchTok, `{"allow":true}`, handoffAnswerOnly, "device:" + watchID, "Watch", nil},
 		{"the watch with the app's feature", watchTok, `{"allow":true}`, handoffAnswerOnly, "device:" + watchID, "Watch", shows},
 		{"the hub's own token", master, `{"allow":true}`, handoffHubToken, "hub token", "", shows},
@@ -145,6 +151,14 @@ func TestOnlyADeviceThatShowsTheHandoffCardApprovesIt(t *testing.T) {
 		relayed, audits, raws := m.took()
 		if len(relayed) != 0 {
 			t.Fatalf("%s: relayed %+v", c.name, relayed)
+		}
+		if key := c.actor + " " + c.reason; recorded[key] { // the same credential and reason again: recorded once
+			if len(audits) != 0 {
+				t.Fatalf("%s: recorded again %+v", c.name, audits)
+			}
+			continue
+		} else {
+			recorded[key] = true
 		}
 		if len(audits) != 2 || audits[0].Extension != "vault" || audits[1].Extension != "keys" {
 			t.Fatalf("%s: recorded on %+v, want vault and keys once each", c.name, audits)
@@ -205,7 +219,8 @@ func TestOnlyADeviceThatShowsTheHandoffCardApprovesIt(t *testing.T) {
 	}
 	relayedOnce("the app that shows the card", me)
 
-	// Declared on the app's connection (client_hello) instead: a request from the same device and build counts.
+	// Declared on the app's connection (client_hello) only: not the card's own request (a lock-screen button of the
+	// same app would match the connection too), refused.
 	c := &client{device: phoneID}
 	c.meta.Platform, c.meta.Version = "ios-app", "3.0+400"
 	c.meta.features = map[string]bool{featureSecretHandoff: true}
@@ -213,12 +228,11 @@ func TestOnlyADeviceThatShowsTheHandoffCardApprovesIt(t *testing.T) {
 	h.clients[c] = struct{}{}
 	h.mu.Unlock()
 	code, out := post(phoneTok, "ix_handoff", `{"allow":true}`, "X-Persona-Client", "ios-app/3.0+400")
-	codeOld, _ := post(phoneTok, "ix_handoff", `{"allow":true}`, "X-Persona-Client", "ios-app/2.9+390")
 	h.mu.Lock()
 	delete(h.clients, c)
 	h.mu.Unlock()
-	if code != http.StatusOK || codeOld != http.StatusForbidden {
-		t.Fatalf("by the connection: %d %v; an older build of the same device: %d", code, out, codeOld)
+	if code != http.StatusForbidden {
+		t.Fatalf("declared on the connection only: %d %v", code, out)
 	}
 	m.took()
 
@@ -300,5 +314,30 @@ func TestAnExtensionNeverApprovesAHandoffCard(t *testing.T) {
 	// Its no reaches the manager (which holds no such card here).
 	if code, out := call(t, srv.Config.Handler, "POST", "/api/v1/interactions/ix_handoff/resolve", tok, `{"allow":false}`); code == http.StatusForbidden {
 		t.Fatalf("the extension's no: %d %v", code, out)
+	}
+}
+
+// A refusal of the same card, credential and reason is recorded once in handoffRecordEvery; what is remembered is
+// bounded, the stale first.
+func TestHandoffRefusalsRecordedOnce(t *testing.T) {
+	var m handoffRecorded
+	now := time.Now()
+	if !m.first("ix\x00device:d\x00client", now) || m.first("ix\x00device:d\x00client", now.Add(time.Minute)) {
+		t.Fatal("the second try within the window was recorded again")
+	}
+	if !m.first("ix\x00device:d\x00answer_only", now) || !m.first("ix2\x00device:d\x00client", now) {
+		t.Fatal("another reason or card was not recorded")
+	}
+	if !m.first("ix\x00device:d\x00client", now.Add(handoffRecordEvery)) {
+		t.Fatal("not recorded again after the window")
+	}
+	for i := range handoffRecordMost {
+		m.first(fmt.Sprint("fill", i), now.Add(handoffRecordEvery))
+	}
+	if m.first("one more", now.Add(handoffRecordEvery)) {
+		t.Fatal("remembered past the bound")
+	}
+	if !m.first("one more", now.Add(3*handoffRecordEvery)) || len(m.seen) > handoffRecordMost {
+		t.Fatalf("the stale were not dropped: %d remembered", len(m.seen))
 	}
 }

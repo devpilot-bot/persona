@@ -1605,14 +1605,16 @@ makes it: a card with `tool_name: "secret_run"` from a node (`interaction.create
 ### Secret hand-off cards (`secret_handoff`, #3962)
 
 A `permission` interaction with `tool_name: "secret_handoff"` asks to hand secret values to one Agent run as environment variables
-(`docs/extensions/secret-providers.md` "Who may approve a hand-off"). Its `tool_input` is `{"variables":[{"name","provider","reference"}]}`
-(never a value). Only the manager's Agent start makes it: a card with that tool name from a node or from `fleet.ask` is refused.
-A client declares `secret_handoff` in `client_hello`'s `features` (or `X-Persona-Features` on its requests) only when it shows the whole
-card and approves it from the card alone. Only a `full` device whose client declared it may approve: any other approval of such a
-card (an answer-only device, an extension's token, the hub's own token, a client without the feature) gets 403
+(`docs/extensions/secret-providers.md` "Who may approve a hand-off"). Its `tool_input` is `{"variables":[{"name","provider","title"?}]}`
+(the item as its provider describes it; never a reference or a value). Only the manager's Agent start makes it: a card with that tool
+name from a node or from `fleet.ask` is refused. Only a `full` device approves it, by a `resolve` request that itself carries
+`X-Persona-Features: secret_handoff`; a client sends that header on the card's own approve request only (not from a notification, a
+widget, the Live Activity, the watch or Siri), and the feature in `client_hello` does not count. Any other approval of such a card
+(an answer-only device, an extension's token, the hub's own token, a request without the feature) gets 403
 `{"code":"secret_handoff_elsewhere"}` with "Approve on iPhone or the web", the card stays pending, and the refusal is recorded in each
-provider's audit log. A plain no (`{"allow":false}`, with or without `message`; `{"dismiss":true}`; `{"cancel":true}`) goes through
-from any client. Its notification category is `INTERACTION_INPUT` (no quick allow button), and `…/choose` answers 400 `not_choosable`.
+provider's audit log. A plain no (`{"allow":false}`, with or without `message`; `{"dismiss":true}`; `{"cancel":true}`; nothing else set)
+goes through from any client. Its notification category is `INTERACTION_INPUT` (no quick allow button), its Live Activity row has no
+`interaction`, and `…/choose` answers 400 `not_choosable`.
 
 ### Terminal dialogs (screen interactions)
 

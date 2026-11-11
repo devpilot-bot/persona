@@ -1,5 +1,7 @@
 package proto
 
+import "encoding/json"
+
 // The hand-off card (docs/extensions/secret-providers.md "Who may approve a hand-off"): the card the manager shows
 // before it hands secret values to one Agent run (secret.stage). Only the manager's own Agent start makes one; the hub
 // lets only a device that may approve it say yes to it.
@@ -13,26 +15,34 @@ const SecretHandoffTool = "secret_handoff"
 // it is approved on the iPhone or the web.
 const CodeSecretHandoffElsewhere = "secret_handoff_elsewhere"
 
-// SecretHandoffInput is the hand-off card's ToolInput: the variables it hands over, each by the provider and the
-// reference it comes from, never a value. The hub reads the providers only, to record a refused approval on each.
+// SecretHandoffInput is the hand-off card's ToolInput: the variables it hands over, each with the provider it comes from
+// and the item as the provider describes it (secrets.describe), never a reference or a value: the card goes to every
+// client and to extensions that read cards, and the manager keeps the references. The hub reads the providers only, to
+// record a refused approval on each.
 type SecretHandoffInput struct {
 	Variables []SecretHandoffVariable `json:"variables"`
 }
 
 // SecretHandoffVariable is one environment variable a hand-off card hands over.
 type SecretHandoffVariable struct {
-	Name      string `json:"name"`
-	Provider  string `json:"provider"`
-	Reference string `json:"reference"`
+	Name     string `json:"name"`
+	Provider string `json:"provider"`
+	Title    string `json:"title,omitempty"`
 }
 
-// SecretHandoffDeclines reports whether r only says no to a hand-off card: deny, dismiss or cancel, with nothing that
-// could read as yes. The hub and the manager take everything else as an approval, which only a device that may
-// approve gives.
+// SecretHandoffDeclines reports whether r only says no to a hand-off card: deny (with or without a message), dismiss or
+// cancel, and nothing else set. The hub and the manager take every other answer as an approval, which only a device
+// that may approve gives. What is left once the no is taken out must encode as {} (every Resolution field is
+// omitempty), so a field added later counts as more than a no until it is thought about here.
 func SecretHandoffDeclines(r Resolution) bool {
-	no := r.Allow != nil && !*r.Allow || r.Dismiss || r.Cancel
-	yes := r.Allow != nil && *r.Allow || r.Approve != nil && *r.Approve || r.Always || r.Option != "" || len(r.Options) > 0 ||
-		len(r.Keys) > 0 || len(r.PreKeys) > 0 || r.Text != "" || len(r.Answers) > 0 || len(r.Values) > 0 ||
-		len(r.Content) > 0 || r.Action != "" || r.Mode != "" || r.Remembered
-	return no && !yes
+	if !(r.Allow != nil && !*r.Allow || r.Dismiss || r.Cancel) {
+		return false
+	}
+	if r.Allow != nil && !*r.Allow {
+		r.Allow = nil
+	}
+	r.Dismiss, r.Cancel = false, false
+	r.Message, r.Feedback, r.AnsweredBy, r.Reason = "", "", "", ""
+	b, err := json.Marshal(r)
+	return err == nil && string(b) == "{}"
 }
