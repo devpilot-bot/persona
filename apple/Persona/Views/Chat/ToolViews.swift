@@ -1191,6 +1191,7 @@ struct DiffFileHeader: View {
         let header = HStack(spacing: Theme.Space.sm) {
             ThemedIcon(FileViewer.symbol(for: path)).font(Theme.Font.label).foregroundStyle(.secondary)
             Text((path as NSString).lastPathComponent).font(Theme.Font.captionStrong).foregroundStyle(.primary).lineLimit(1)
+                .layoutPriority(1) // the folder gives way first: at the largest sizes the two cut each other to a letter
             Text((path as NSString).deletingLastPathComponent).font(Theme.Font.caption).foregroundStyle(.secondary)
                 .lineLimit(1).truncationMode(.head)
             Spacer(minLength: 4)
