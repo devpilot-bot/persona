@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -116,6 +117,14 @@ func (n *Node) startCodex(ctx context.Context, launch host.Launcher, cwd, launch
 	if strings.TrimSpace(prompt) == "" {
 		return nil, refusal("codex_needs_prompt", "新建 Codex 会话要连第一条消息一起发：Codex 收到第一条消息才建会话。", nil)
 	}
+	if mode == "bypassPermissions" {
+		// Managed launcher arguments are prepended later by personad launch.
+		managed, _ := n.managedLauncher(launcher)
+		if !slices.Contains(argv, "--dangerously-bypass-approvals-and-sandbox") && !slices.Contains(argv, "--yolo") &&
+			!slices.Contains(managed.Args, "--dangerously-bypass-approvals-and-sandbox") && !slices.Contains(managed.Args, "--yolo") {
+			argv = append(argv, "--dangerously-bypass-approvals-and-sandbox")
+		}
+	}
 	key := cwd + "\x00" + launcher
 	if err := n.closeAbandonedCodex(ctx, key); err != nil {
 		return nil, err
@@ -191,7 +200,7 @@ func (n *Node) startCodex(ctx context.Context, launch host.Launcher, cwd, launch
 	}
 	n.bindPane(pane, id)
 	st := sessionState{Pane: pane, Launcher: launcher, Cwd: cwd, StartedAt: began.UTC()}
-	if mode == "plan" { // Other modes still come from the launcher's arguments, not this request.
+	if mode == "plan" {
 		st.AppMode = mode
 	}
 	n.state.put(id, st)

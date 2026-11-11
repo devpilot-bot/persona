@@ -153,6 +153,52 @@ func TestCodexStartUsesThePurposeModel(t *testing.T) {
 	}
 }
 
+func TestCodexStartPermissionModes(t *testing.T) {
+	for _, tc := range []struct {
+		name, mode string
+		args, want []string
+		managed    bool
+	}{
+		{"bypass", "bypassPermissions", nil, []string{"--dangerously-bypass-approvals-and-sandbox"}, false},
+		{"alias bypass", "bypassPermissions", []string{"--model", "sample-model"}, []string{"--model", "sample-model", "--dangerously-bypass-approvals-and-sandbox"}, false},
+		{"existing bypass", "bypassPermissions", []string{"--dangerously-bypass-approvals-and-sandbox"}, []string{"--dangerously-bypass-approvals-and-sandbox"}, false},
+		{"existing yolo", "bypassPermissions", []string{"--yolo"}, []string{"--yolo"}, false},
+		{"managed bypass", "bypassPermissions", nil, []string{"--dangerously-bypass-approvals-and-sandbox"}, true},
+		{"managed existing bypass", "bypassPermissions", []string{"--dangerously-bypass-approvals-and-sandbox"}, nil, true},
+		{"managed existing yolo", "bypassPermissions", []string{"--yolo"}, nil, true},
+		{"plan", "plan", nil, []string{"--sandbox", "read-only", "--ask-for-approval", "never"}, false},
+		{"managed plan", "plan", nil, []string{"--sandbox", "read-only", "--ask-for-approval", "never"}, true},
+		{"default", "default", []string{"--model", "sample-model"}, []string{"--model", "sample-model"}, false},
+		{"unspecified", "", nil, nil, false},
+		{"other mode", "acceptEdits", []string{"--full-auto"}, []string{"--full-auto"}, false},
+		{"managed default", "default", nil, nil, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			withCodexLaunchers(t, map[string][]string{})
+			n, _, _, _ := codexStartHerdr(t, 0)
+			launcher := "code-alias"
+			base := []string{"codex"}
+			if tc.managed {
+				launcher = "managed-codex"
+				n.setManaged([]proto.ManagedLauncher{{Name: launcher, Agent: "codex", Args: tc.args}})
+				base = []string{n.bin, "launch", launcher}
+			} else {
+				withCodexLaunchers(t, map[string][]string{launcher: append([]string{"codex"}, tc.args...)})
+			}
+			_, err := request(t, n, "session.start", map[string]any{
+				"cwd": "~/proj", "launcher": launcher, "permission_mode": tc.mode, "prompt": "Inspect the project",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := append(base, tc.want...)
+			if !slices.Equal(ran, want) {
+				t.Fatalf("started with %q, want %q", ran, want)
+			}
+		})
+	}
+}
+
 func TestCodexStartRefusals(t *testing.T) {
 	withCodexLaunchers(t, map[string][]string{"codex": {"codex"}})
 	n, _, _, cmds := codexStartHerdr(t, 0)
