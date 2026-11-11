@@ -479,13 +479,16 @@ arriving every minute neither resets them nor restarts work already done.
 
 ### The push
 
-One push a day, at the recap time: with the newest ready recap of each day recording it covered, or, when none is
-ready then, with the first one written after it (a final recap of a day that had none counts too). A recap asked for
-with `POST …/minutes` before the recap time does not use the push up. "Your day recap is ready" with the number of
-meetings and suggested to-dos, a stable id per `day`, a tap opens the main chat; the Lark bot and channels with pushes on get the same text with the
-recording's web link, as minutes do. The hub marks the push pending in the same write as that recap and clears it once
-sent, so a restart between them sends it then (the stable id keeps the phone from showing two). Later versions do not
-push. A failure does not notify.
+One push a day. At the recap time, if a recap of the day is ready (whether written then or asked for earlier), the
+hub marks the day's push pending from it at once; otherwise it records that the day waits for its first recap, and
+marks the push pending in the same write as that recap (a final recap of a day that had none counts too). A recap
+asked for with `POST …/minutes` before the recap time never makes the push due. Restarts pick up both states.
+
+The push says "Your day recap is ready" with the number of meetings and suggested to-dos, has a stable id per `day`,
+and a tap opens the main chat. The phone notification and each channel (the Lark bot and channels with pushes on, which
+get the same text with the recording's web link, as minutes do) are marked done separately once each was handed over;
+after a restart the phone notification's stable id keeps the phone from showing two, while a channel may get a copy
+twice (at least once). Later versions do not push. A failure does not notify.
 
 ## The evening routine
 
