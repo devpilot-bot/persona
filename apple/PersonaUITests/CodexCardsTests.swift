@@ -15,11 +15,21 @@ final class CodexCardsTests: XCTestCase {
         return hub
     }
 
-    private func shot(_ name: String) {
-        // A launch in another style changes the app's icon, and the system says so in an alert over the card: OK.
+    /// A system alert over the app, let through: a launch in another style changes the app's icon and the system says so;
+    /// a fresh simulator asks about notifications on the first launch.
+    private func dismissSystemAlert(wait: TimeInterval = 1) {
         let ok = XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts.buttons
             .matching(NSPredicate(format: "label IN %@", ["OK", "好", "Allow", "允许"])).firstMatch
-        if ok.waitForExistence(timeout: 1) { ok.tap() }
+        if ok.waitForExistence(timeout: wait) { ok.tap() }
+    }
+
+    /// The card's Approve. On iPad the session list beside the chat has its own Approve on the session's row.
+    private func approve(_ app: XCUIApplication) -> XCUIElement {
+        app.buttons.matching(NSPredicate(format: "label == %@ AND identifier != %@", "同意", "agents.interaction")).firstMatch
+    }
+
+    private func shot(_ name: String) {
+        dismissSystemAlert()
         let png = XCUIScreen.main.screenshot()
         let a = XCTAttachment(screenshot: png)
         a.name = name
@@ -61,6 +71,7 @@ final class CodexCardsTests: XCTestCase {
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
         app.launchArguments = ["-pairURL", pair, "-openSession", orders]
         app.launchPersona()
+        dismissSystemAlert(wait: 3)
 
         let title = anything(app, "Codex 需要你授权")
         XCTAssertTrue(title.waitForExistence(timeout: 20), app.debugDescription)
@@ -69,7 +80,7 @@ final class CodexCardsTests: XCTestCase {
         XCTAssertTrue(anything(app, "localhost:8080/orders").exists, "the command")
         let always = app.buttons["codex-always"]
         XCTAssertTrue(always.exists && always.label.contains("以后不再问以 curl -s 开头的命令"), "总是同意 says what it allows")
-        XCTAssertTrue(app.buttons["同意"].exists && app.buttons["拒绝"].exists)
+        XCTAssertTrue(approve(app).exists && app.buttons["拒绝"].exists)
         shot("approval")
 
         // Deny and Explain…: a field with its own send button.
@@ -88,7 +99,7 @@ final class CodexCardsTests: XCTestCase {
         XCTAssertEqual(first?["message"] as? String, "先别连本地服务，看慢查询日志")
 
         // Then Approve: taken, the card goes; the question is next.
-        app.buttons["同意"].tap()
+        approve(app).tap()
         let question = anything(app, "Codex 在问你")
         XCTAssertTrue(question.waitForExistence(timeout: 10), app.debugDescription)
         let allowed = resolved(hub).filter { $0["id"] as? String == "cxa_orders_curl" }
@@ -133,8 +144,9 @@ final class CodexCardsTests: XCTestCase {
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
         app.launchArguments = ["-pairURL", pair, "-openSession", orders]
         app.launchPersona()
+        dismissSystemAlert(wait: 3)
         XCTAssertTrue(anything(app, "Codex 需要你授权").waitForExistence(timeout: 20), app.debugDescription)
-        app.buttons["同意"].tap()
+        approve(app).tap()
         XCTAssertTrue(anything(app, "Codex 在问你").waitForExistence(timeout: 10), app.debugDescription)
         anything(app, "只给 user_id 加索引").tap()
         XCTAssertTrue(anything(app, "改完以后怎么验证？").waitForExistence(timeout: 5))
