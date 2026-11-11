@@ -172,6 +172,7 @@ struct RecordingMinutesSections: View {
     /// The hub has this revision of its text (Regenerate needs the whole transcript there).
     var synced: Bool
     var jump: (Double) -> Void
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
         switch model.state {
@@ -290,7 +291,7 @@ struct RecordingMinutesSections: View {
                                 .accessibilityIdentifier("minutes-added")
                         } else if offered, let id = item.id, !id.isEmpty {
                             Button { Task { await model.add([id], to: entry, synced: synced) } } label: {
-                                Label("Add to To-Dos", systemImage: Theme.Icon.add).lineLimit(1)
+                                Label("Add to To-Dos", systemImage: Theme.Icon.add).lineLimit(1).minimumScaleFactor(0.8)
                             }
                             .themedButton()
                             .disabled(model.asking)
@@ -311,9 +312,11 @@ struct RecordingMinutesSections: View {
     }
 
     /// A point, decision, action item or open question: its words, who and by when, its time; `below` under the words (an
-    /// action item's Add to To-Dos).
+    /// action item's Add to To-Dos). At the accessibility sizes the time goes under the words, which then have the row's
+    /// width: beside it they broke every three characters and Add to To-Dos read "+ …" (#4062).
     private func row<Below: View>(_ item: RecordingMinutes.Item, _ symbol: String, @ViewBuilder below: () -> Below) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
+        let large = typeSize.isAccessibilitySize
+        return HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
             ThemedIcon(symbol).font(Theme.Font.secondary).foregroundStyle(Theme.accent)
                 .scaledFrame(width: Theme.Size.iconXS)
             VStack(alignment: .leading, spacing: Theme.Space.xxs) {
@@ -321,17 +324,23 @@ struct RecordingMinutesSections: View {
                 if let byline = RecordingMinutes.byline(item) {
                     Text(byline).font(Theme.Font.caption).foregroundStyle(.secondary)
                 }
+                if large { time(item) }
                 below()
             }
             Spacer(minLength: Theme.Space.s)
-            if let at = item.at {
-                Button { jump(at) } label: {
-                    Chip(text: RecordingFormat.clock(at), look: .tint(Theme.accent), compact: true)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(String(localized: "Show in transcript at \(RecordingFormat.clock(at))"))
-                .accessibilityIdentifier("minutes-time")
+            if !large { time(item) }
+        }
+    }
+
+    /// When it was said: a tap shows that line of the transcript.
+    @ViewBuilder private func time(_ item: RecordingMinutes.Item) -> some View {
+        if let at = item.at {
+            Button { jump(at) } label: {
+                Chip(text: RecordingFormat.clock(at), look: .tint(Theme.accent), compact: true)
             }
+            .buttonStyle(.plain)
+            .accessibilityLabel(String(localized: "Show in transcript at \(RecordingFormat.clock(at))"))
+            .accessibilityIdentifier("minutes-time")
         }
     }
 

@@ -186,16 +186,24 @@ final class MeetingRecordingUITests: XCTestCase {
                                    "-ui.scheme", look == "dark" ? "dark" : "light"]
                 + (look == "large" ? ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"] : [])
             app.launchPinned()
-            XCTAssertTrue(app.buttons["minutes-copy"].waitForExistence(timeout: 45), "\(look): no minutes:\n\(app.debugDescription)")
+            // At the largest text the meeting's own card fills the first screens, and a list builds no rows below them:
+            // scroll a little while the minutes load.
+            let copy = app.buttons["minutes-copy"]
+            var swipes = 0
+            XCTAssertTrue(wait(45) {
+                if copy.exists { return true }
+                if look == "large", swipes < 4 { app.swipeUp(); swipes += 1 }
+                return false
+            }, "\(look): no minutes:\n\(app.debugDescription)")
             let regenerate = app.buttons["minutes-regenerate"]
             if look != "large" {
                 scroll(to: regenerate, in: app)
-                XCTAssertTrue(regenerate.isHittable, "\(look): no Regenerate over the minutes:\n\(app.debugDescription)")
+                XCTAssertTrue(onScreen(regenerate, in: app), "\(look): no Regenerate over the minutes:\n\(app.debugDescription)")
                 try shot(app, "minutes-regenerate", look: look)
             }
             let addAll = app.buttons["minutes-add-all"]
             scroll(to: addAll, in: app, swipes: look == "large" ? 30 : 8)
-            XCTAssertTrue(addAll.isHittable, "\(look): no Add All with two left:\n\(app.debugDescription)")
+            XCTAssertTrue(onScreen(addAll, in: app), "\(look): no Add All with two left:\n\(app.debugDescription)")
             let add = app.buttons.matching(identifier: "minutes-add")
             if look != "large" { XCTAssertEqual(add.count, 2, "\(look): each action item has Add to To-Dos") }
             try shot(app, "minutes-actions", look: look)
@@ -217,6 +225,7 @@ final class MeetingRecordingUITests: XCTestCase {
 
             // Regenerate: the minutes stay, Updating, then the next version (its action items suggestions again).
             scroll(to: regenerate, in: app, up: true)
+            XCTAssertTrue(onScreen(regenerate, in: app), "\(look): Regenerate not on the screen:\n\(app.debugDescription)")
             regenerate.tap()
             let updating = app.descendants(matching: .any)["minutes-updating"].firstMatch
             XCTAssertTrue(updating.waitForExistence(timeout: 10), "\(look): no Updating:\n\(app.debugDescription)")
@@ -255,8 +264,17 @@ final class MeetingRecordingUITests: XCTestCase {
         try app.screenshot().pngRepresentation.write(to: URL(fileURLWithPath: "\(dir)/meeting-\(look)-\(name).png"))
     }
 
+    /// Scrolls until `el` is on the screen and clear of the navigation bar: a button under the bar's blur still reads as
+    /// hittable, and a tap there lands on the bar (Regenerate after an add, in the first run).
     @MainActor private func scroll(to el: XCUIElement, in app: XCUIApplication, swipes: Int = 8, up: Bool = false) {
-        for _ in 0..<swipes where !(el.exists && el.isHittable) { if up { app.swipeDown() } else { app.swipeUp() } }
+        for _ in 0..<swipes where !onScreen(el, in: app) { if up { app.swipeDown() } else { app.swipeUp() } }
+    }
+
+    @MainActor private func onScreen(_ el: XCUIElement, in app: XCUIApplication) -> Bool {
+        guard el.exists, el.isHittable else { return false }
+        let bar = app.navigationBars.firstMatch
+        let top = bar.exists ? bar.frame.maxY : app.frame.minY
+        return el.frame.minY >= top && el.frame.maxY <= app.frame.maxY
     }
 
     /// The to-dos a recording's action items became on the hub (their `todo_id`).
