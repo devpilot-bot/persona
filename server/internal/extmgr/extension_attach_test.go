@@ -468,6 +468,28 @@ func TestHubAuditTakesRefusedPermissionModes(t *testing.T) {
 	}
 }
 
+// A refused approval of a hand-off card is recorded on the provider, with who tried as the actor the hub names; an
+// actor that is none of the kinds the records use is "unknown".
+func TestHubAuditTakesRefusedHandoffApprovals(t *testing.T) {
+	h, store := extensionTestHub(t)
+	ctx := t.Context()
+	for _, actor := range []string{"device:d1", "extension:other", "hub token", "admin", "device:x\nforged", ""} {
+		params, _ := json.Marshal(extwire.Audit{Extension: "vault", Action: extwire.AuditSecretHandoffRefused, Actor: actor,
+			Detail: map[string]any{"interaction_id": "ix_1", "reason": "client"}})
+		if _, err := h.hubCall(ctx, extwire.HubAudit, params); err != nil {
+			t.Fatal(err)
+		}
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	want := []string{"vault secret_handoff_approve_refused device:d1", "vault secret_handoff_approve_refused extension:other",
+		"vault secret_handoff_approve_refused hub token", "vault secret_handoff_approve_refused unknown",
+		"vault secret_handoff_approve_refused unknown", "vault secret_handoff_approve_refused unknown"}
+	if !slices.Equal(store.audit, want) {
+		t.Fatalf("audit: %q", store.audit)
+	}
+}
+
 // An attached extension reads the assistant's conversations by its own grant only, as one the manager runs does: its
 // token's scopes and agents.control do not open them.
 func TestAttachedExtensionReadsConversationsByItsOwnGrant(t *testing.T) {

@@ -479,10 +479,15 @@ func (h *Manager) hubCall(ctx context.Context, method string, params json.RawMes
 	case extwire.HubAudit:
 		var au extwire.Audit
 		if err := json.Unmarshal(params, &au); err != nil || au.Extension == "" ||
-			au.Action != extwire.AuditPermissionModeRefused && au.Action != extwire.AuditTerminalControlRefused {
+			au.Action != extwire.AuditPermissionModeRefused && au.Action != extwire.AuditTerminalControlRefused &&
+				au.Action != extwire.AuditSecretHandoffRefused {
 			return nil, &rpc.Error{Code: bus.CodeInvalidParams, Message: "extensions: not an audit the hub records"}
 		}
-		h.audit(ctx, au.Extension, au.Action, "extension:"+au.Extension, au.Detail)
+		actor := "extension:" + au.Extension
+		if au.Action == extwire.AuditSecretHandoffRefused { // the provider's record of someone else's try
+			actor = handoffActor(au.Actor)
+		}
+		h.audit(ctx, au.Extension, au.Action, actor, au.Detail)
 		return map[string]any{}, nil
 	}
 	return nil, fmt.Errorf("extensions: no hub call %q", method)
@@ -723,4 +728,14 @@ func (h *Manager) extensionLooks() []extwire.LookPackage {
 		}
 	})
 	return out
+}
+
+// handoffActor is who the hub says tried to approve a hand-off card, as the other records name an actor ("device:<id>",
+// "extension:<id>", "hub token"); anything else is "unknown". Clipped: it is a column a page lists.
+func handoffActor(a string) string {
+	if a == "hub token" || (strings.HasPrefix(a, "device:") || strings.HasPrefix(a, "extension:")) && len(a) <= 160 &&
+		!strings.ContainsFunc(a, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
+		return a
+	}
+	return "unknown"
 }

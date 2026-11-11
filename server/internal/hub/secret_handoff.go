@@ -1,0 +1,144 @@
+package hub
+
+import (
+	"cmp"
+	"context"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"time"
+
+	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/extwire"
+	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/proto"
+)
+
+// The hand-off card's gate (docs/extensions/secret-providers.md "Who may approve a hand-off"). A hand-off card
+// (proto.SecretHandoffTool) hands secret values to one Agent run once it is approved, so only a full device whose app
+// shows the card may approve it: one whose client declared featureSecretHandoff (client_hello's features, or the
+// request's X-Persona-Features; requestWants). An answer-only device (the watch), an extension's token, the hub's own
+// token and an app that does not show the card (Android, the Mac app, an older app) get 403 secret_handoff_elsewhere,
+// and each refusal is recorded on every provider the card names (extwire.AuditSecretHandoffRefused). A plain no (deny,
+// dismiss, cancel: proto.SecretHandoffDeclines) goes through from any of them.
+//
+// The device that may approve goes to the manager in HTTPRequest.HandoffApprover, never in a header, on an answer to a
+// hand-off card and on one to a card the hub does not hold (after a restart, before the manager reported its cards
+// again): the manager approves a hand-off only with it, so it checks the cards the hub could not. A card's push never
+// offers buttons (interactionPayloadIn): a tap opens the card.
+
+// featureSecretHandoff: the client shows the hand-off card whole (what is handed over, from where, to which Agent on
+// which computer) and approves it only from that card, never from a notification, a widget, the watch or Siri.
+const featureSecretHandoff = "secret_handoff"
+
+// Why a request may not approve a hand-off card (the record's reason).
+const (
+	handoffAnswerOnly = "answer_only" // the watch
+	handoffExtension  = "extension"   // an extension's token
+	handoffHubToken   = "hub_token"   // the hub's own token: no device
+	handoffRole       = "role"        // any other credential that is not a full device's
+	handoffClient     = "client"      // a full device whose client did not declare featureSecretHandoff
+)
+
+type handoffApproverKey struct{}
+
+// handoffApprover is the device r comes from when it may approve a hand-off card, else why not.
+func (h *Hub) handoffApprover(r *http.Request) (assistantwire.HandoffApprover, string) {
+	p := principalOf(r.Context())
+	switch {
+	case p.Role == roleAnswer:
+		return assistantwire.HandoffApprover{}, handoffAnswerOnly
+	case p.Role == roleExtension:
+		return assistantwire.HandoffApprover{}, handoffExtension
+	case p.Role != roleFull:
+		return assistantwire.HandoffApprover{}, handoffRole
+	case p.ID == "":
+		return assistantwire.HandoffApprover{}, handoffHubToken
+	case !h.requestWants(r, featureSecretHandoff):
+		return assistantwire.HandoffApprover{}, handoffClient
+	}
+	return assistantwire.HandoffApprover{DeviceID: p.ID, DeviceName: p.Name}, ""
+}
+
+// handoffGate checks answer res to card id before it is relayed: r to relay (carrying the approver when the manager
+// needs it), or false when it was refused and answered here. An answer to another card passes untouched.
+func (h *Hub) handoffGate(w http.ResponseWriter, r *http.Request, id string, res proto.Resolution) (*http.Request, bool) {
+	ix, known := h.pendingInteraction(id)
+	if known && ix.ToolName != proto.SecretHandoffTool {
+		return r, true
+	}
+	a, why := h.handoffApprover(r)
+	if why == "" {
+		return r.WithContext(context.WithValue(r.Context(), handoffApproverKey{}, a)), true
+	}
+	if !known || proto.SecretHandoffDeclines(res) { // a card the hub does not hold is the manager's to refuse
+		return r, true
+	}
+	h.refuseHandoff(w, r, ix, why)
+	return r, false
+}
+
+// handoffApproverOf is the approver handoffGate put on r's context.
+func handoffApproverOf(ctx context.Context) *assistantwire.HandoffApprover {
+	if a, ok := ctx.Value(handoffApproverKey{}).(assistantwire.HandoffApprover); ok && a.DeviceID != "" {
+		return &a
+	}
+	return nil
+}
+
+// refuseHandoff answers 403 to an approval of hand-off card ix that r may not give (why), and has the card's manager
+// record it on each provider the card names: who tried, from which role, on which card. Nothing of what the card
+// hands over (variables, references) is in it.
+func (h *Hub) refuseHandoff(w http.ResponseWriter, r *http.Request, ix proto.Interaction, why string) {
+	p := principalOf(r.Context())
+	actor := "hub token"
+	switch {
+	case p.Role == roleExtension && p.Extension != "":
+		actor = "extension:" + p.Extension
+	case p.ID != "":
+		actor = "device:" + p.ID
+	}
+	detail := map[string]any{"interaction_id": rowText(ix.ID, 128), "machine_id": rowText(ix.MachineID, 128),
+		"session_id": rowText(ix.SessionID, 128), "role": p.Role, "reason": why}
+	if p.Name != "" && p.Role != roleExtension {
+		detail["device_name"] = rowText(p.Name, 128)
+	}
+	h.logf("hand-off card %s: an approval from %s refused (%s)", clip(ix.ID, 64), clip(actor, 96), why)
+	providers := handoffProviders(ix)
+	if len(providers) == 0 {
+		h.logf("hand-off card %s names no provider: the refusal is not recorded", clip(ix.ID, 64))
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 5*time.Second)
+	defer cancel()
+	manager := cmp.Or(ix.Manager, assistantwire.AssistantID)
+	for _, prov := range providers {
+		audit := extwire.Audit{Extension: prov, Action: extwire.AuditSecretHandoffRefused, Actor: actor, Detail: detail}
+		if err := h.extCallTo(ctx, manager, extwire.HubAudit, audit, nil); err != nil {
+			h.logf("hand-off card %s: the refusal is not recorded on %s: %v", clip(ix.ID, 64), clip(prov, 64), err)
+		}
+	}
+	writeErrCode(w, http.StatusForbidden, proto.CodeSecretHandoffElsewhere,
+		errors.New(i18n.T(h.requestLang(r), "hub-secret_handoff.approve_elsewhere")))
+}
+
+// handoffProviders are the providers hand-off card ix names, each once, at most proto.SecretEnvMost.
+func handoffProviders(ix proto.Interaction) []string {
+	var in proto.SecretHandoffInput
+	if json.Unmarshal(ix.ToolInput, &in) != nil {
+		return nil
+	}
+	var out []string
+	seen := map[string]bool{}
+	for _, v := range in.Variables {
+		prov := rowText(v.Provider, 128)
+		if prov == "" || seen[prov] {
+			continue
+		}
+		if len(out) == proto.SecretEnvMost {
+			break
+		}
+		seen[prov] = true
+		out = append(out, prov)
+	}
+	return out
+}
