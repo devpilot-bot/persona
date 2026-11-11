@@ -520,7 +520,7 @@ func TestAssistantBypassWrappedCommands(t *testing.T) {
 		`env FOO=1 -u BAR "$C" im +messages-send --text hello`,
 		`sudo -u "$USER" -n env FOO=1 nice -n5 "$C"`,
 		`env --unknown-option value "$C"`, `sudo --unknown-option value lark-cli im +messages-send`,
-		`env -S "$PROGRAM"`, `eval 'env' '"$C"'`,
+		`env -S "$PROGRAM"`, `env -S 'env "$C"'`, `eval 'env' '"$C"'`,
 		`eval 'lark-cli im' '+messages-send --text hello'`,
 		`(true); sudo env nice "$C" im +messages-send <<< input`,
 		"env \"$C\" im +messages-send\n)",
