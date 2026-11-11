@@ -1229,7 +1229,7 @@ struct AssistantSidebar: View {
         if AppStyle.current.usesBeautifulUI {
             // SidebarNav's primary items.
             BUISidebarRow(title, symbol: Theme.Icon.styled(symbol), action: run) {
-                if count > 0 { CountBadge(count: count, look: .solid(Theme.needsYou)) }
+                if count > 0 { CountBadge(count: count, look: .needs) }
             }
             .accessibilityIdentifier(id ?? "sidebar-" + title)
         } else {
@@ -1246,7 +1246,7 @@ struct AssistantSidebar: View {
                     .scaledFrame(width: Theme.Sidebar.glyphColumn)
                 Text(title).font(Theme.Font.body).foregroundStyle(Color.primary).lineLimit(1)
                 Spacer(minLength: 0)
-                if count > 0 { CountBadge(count: count, look: .solid(Theme.needsYou)) }
+                if count > 0 { CountBadge(count: count, look: .needs) }
             }
             .padding(.horizontal, Theme.Space.m)
             .padding(.vertical, Theme.Sidebar.rowPadding)
@@ -1393,11 +1393,11 @@ struct AssistantSidebar: View {
     /// A group's state on the right: how many wait for the user, else one working, else one unread.
     @ViewBuilder private func stateMark(needsYou: Int, working: Bool, unread: Int) -> some View {
         if needsYou > 0 {
-            CountBadge(count: needsYou, look: .solid(Theme.needsYou))
+            CountBadge(count: needsYou, look: .needs)
         } else if working {
-            ProgressView().controlSize(.mini)
+            RowStateMark(state: .working)
         } else if unread > 0 {
-            Circle().fill(Theme.accent).scaledFrame(width: Theme.Size.dot, height: Theme.Size.dot)
+            RowStateMark(state: .unread)
         }
     }
 
@@ -1523,7 +1523,7 @@ struct AssistantSidebar: View {
                 titleText(title, named: !isMain)
                 ConversationChannelMark(ids: s.channels) // the channel its latest message came in from
                 Spacer(minLength: Theme.Space.xs)
-                mark(s)
+                RowStateMark(state: s.state)
             }
             .padding(.horizontal, Theme.Space.m)
             .padding(.vertical, Theme.Sidebar.rowPadding)
@@ -1585,16 +1585,6 @@ struct AssistantSidebar: View {
             }
             .padding(Theme.Space.l)
             .frame(width: Theme.Size.box280, alignment: .leading)
-        }
-    }
-
-    /// Waiting for you, working or unread at the end of the row; nothing otherwise.
-    @ViewBuilder private func mark(_ s: Session) -> some View {
-        switch s.state {
-        case .working: ProgressView().controlSize(.mini)
-        case .needsYou: Circle().fill(Theme.needsYou).scaledFrame(width: Theme.Size.dot, height: Theme.Size.dot)
-        case .unread: Circle().fill(Theme.accent).scaledFrame(width: Theme.Size.dot, height: Theme.Size.dot)
-        default: EmptyView()
         }
     }
 
