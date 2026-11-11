@@ -349,7 +349,7 @@ struct CountBadge: View {
         case solid(Color)
         case tone(StatusTone)
 
-        /// What waits for the user to act (#4538): Needs You's words on its neutral tint, as on the web and Android.
+        /// What waits for the user to act (#4538): Needs You's words on its neutral tint, as the web's `needs` tone.
         static var needs: Look { .tone(StatusPalette.needsYou) }
         /// A passive total: unread messages, items in a group.
         static var neutral: Look { .solid(Theme.countBadge) }
