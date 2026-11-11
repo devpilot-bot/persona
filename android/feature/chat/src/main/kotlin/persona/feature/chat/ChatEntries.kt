@@ -149,8 +149,6 @@ fun ChatDestination(
     historyReadOnly: Boolean = false, onHistoryBack: (() -> Unit)? = null,
     historyFooter: (@Composable () -> Unit)? = null,
     historySession: Session? = null,
-    /** Who opened the conversation, from the page that shows it ([ChatScreen]'s `origin`). */
-    origin: String? = null,
 ) {
     val context = LocalContext.current.applicationContext
     val services = remember(context) { EntryPointAccessors.fromApplication(context, ChatServices::class.java) }
@@ -188,7 +186,7 @@ fun ChatDestination(
             inboxTrays = services.inboxTrays(), inboxScope = wiring?.scope?.path),
         renderStyle = style,
         embedded = embedded, showTopBar = showTopBar,
-        historyReadOnly = historyReadOnly, historyFooter = historyFooter, historySession = historySession, origin = origin,
+        historyReadOnly = historyReadOnly, historyFooter = historyFooter, historySession = historySession,
         composerState = composer, onDraftChanged = editor?.let { it::changed },
         composerService = wiring?.composer.takeUnless { historyReadOnly },
         statusBindings = ChatStatusBindings(recovery = wiring?.recovery.takeUnless { historyReadOnly }, draftSaveError = error?.let { stringResource(it) }),
