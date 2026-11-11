@@ -16,8 +16,8 @@ type commandWrapper struct {
 }
 
 var commandWrappers = map[string]commandWrapper{
-	"env":     {flags: "-i --ignore-environment -0 --null -v --debug", values: "-u --unset -C --chdir --argv0", assignments: true},
-	"sudo":    {flags: "-A -b -E -H -K -k -n -P -S --askpass --background --preserve-env --set-home --reset-timestamp --non-interactive --stdin", values: "-u --user -g --group -h --host -p --prompt -C --close-from -D --chdir -R --chroot -T --command-timeout -r --role -t --type --other-user"},
+	"env":     {flags: "- -i --ignore-environment -0 --null -v --debug", values: "-u --unset -C --chdir --argv0", assignments: true},
+	"sudo":    {flags: "-A -b -E -H -K -k -n -P -S --askpass --background --preserve-env --set-home --reset-timestamp --non-interactive --stdin", values: "-u --user -g --group -h --host -p --prompt -C --close-from -D --chdir -R --chroot -T --command-timeout -r --role -t --type --other-user", assignments: true},
 	"nice":    {values: "-n --adjustment"},
 	"timeout": {flags: "--preserve-status --foreground -v --verbose", values: "-s --signal -k --kill-after", positional: 1},
 	"nohup":   {},
@@ -67,6 +67,10 @@ func unwrapCommand(words []string) ([]string, bool) {
 				words = words[1:]
 				continue
 			}
+			if w == "-" && wrapperHasOption(spec.flags, w) {
+				words = words[1:]
+				continue
+			}
 			if !strings.HasPrefix(w, "-") || w == "-" {
 				break
 			}
@@ -108,6 +112,11 @@ func unwrapCommand(words []string) ([]string, bool) {
 				words = words[1:]
 			}
 		}
+		if spec.assignments {
+			for len(words) > 0 && isAssignment(words[0]) {
+				words = words[1:]
+			}
+		}
 		if len(words) < spec.positional {
 			return words, false
 		}
@@ -128,7 +137,7 @@ func shellScriptIndex(words []string) int {
 		if !strings.HasPrefix(option, "-") || option == "--" {
 			return -1
 		}
-		if option == "-o" || option == "-O" {
+		if wrapperHasOption("-o -O --rcfile --init-file", option) {
 			i++
 			continue
 		}
