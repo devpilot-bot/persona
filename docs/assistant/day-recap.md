@@ -126,11 +126,12 @@ and the phone; the hub never sees it.
   finished, oldest first. The system delivers it when it can, which can take minutes; the phone acknowledges it with
   a message (or `transferUserInfo` while not reachable).
 - **Batching is allowed, but bounded**: in Low Power Mode, or while messages fail, the watch may hold chunks and send
-  them together, never more than 5 minutes behind while the phone is reachable. The whole day is never sent at the
-  end.
+  them together, never more than 5 minutes behind for audio recorded while the phone is reachable (a backlog from
+  while it was out of reach drains as fast as the system delivers files). The whole day is never sent at the end.
 - At most one outstanding `transferFile` per `(recording, seq)`; a chunk with one outstanding is not sent again until
   that transfer fails, or completes without an acknowledgement within 60 s. When the phone becomes reachable the watch
-  cancels the outstanding transfers (`WCSessionFileTransfer.cancel()`) and sends those chunks live, oldest first.
+  cancels the outstanding transfers of chunks that fit the live envelope (`WCSessionFileTransfer.cancel()`) and sends
+  them live, oldest first; larger ones (the 60-second chunks recorded while out of reach) stay with `transferFile`.
 
 ### Control events
 
@@ -185,7 +186,8 @@ without guessing from gaps between chunks:
   `{"recording", "erase": {"id", "from", "to"}}` to the watch (message, or `transferUserInfo`), which closes and erases
   the chunk being written when it overlaps, deletes the chunks it holds in the range and confirms with
   `{"recording", "erased": "<id>", "seqs": [[from, to]]}` (every chunk it deleted before the phone acknowledged it,
-  settled like an `erase` event's); the phone resends until confirmed.
+  settled like an `erase` event's); the phone resends until confirmed. The watch records the erase's `id` and `seqs`
+  durably before deleting anything, and answers a repeated request with the same confirmation.
 - An erase that spans midnight applies to both day recordings.
 
 ### Deleting
@@ -266,7 +268,8 @@ full-state `PUT /api/v1/recordings/{id}` and then grows by appends:
   - `gaps`: `[{"from", "to", "reason"}]`, time with no text and why: the control events' `paused`, `interrupted` and
     `stopped`, `pending` (the watch still holds the audio), `lost` and `erased`. Recorded silence is not a gap. The hub
     mends what it gets (sorts, merges overlaps, where reasons differ the gap that starts first keeps the overlap,
-    clamps to 0 and above, joins the closest gaps down to 500, keeps an unknown `reason`) and never refuses it for that.
+    clamps to 0 and above, keeps an unknown `reason`) and never refuses it for that. Over 500 gaps it joins the closest
+    gaps of the same reason; `erased` gaps are kept exactly, never joined, and are what the recap's withdrawal reads.
 - `complete` is `true` only once the day recording is closed (the watch's `closed` applied), no gap is `pending`, and
   every chunk below `seq_count` is transcribed and appended, reported lost, or erased. A part closed early ("Parts")
   becomes `complete` together with the day, never before.
@@ -327,8 +330,9 @@ closes that part (an append with `ended_at` = now; its `pending` gaps move to th
 with the day) and sends every sentence not yet stored, whatever its time, to the next part: a new UUID, the same
 `day`, `tz` and `started_at` (the day's clock, so no time is ever negative), `part` one higher.
 The phone maps each `(recording, seq)` and each sentence to the part that holds it, for erasing and repairs. A
-repair `PUT` answered `413 day_full` is split the same way: the part gets the sentences that fit, in position order,
-and the rest go to the next part. Each part
+repair `PUT` answered `413 day_full` is split the same way: the corrected part and the parts after it are
+repartitioned together in position order (a durable plan on the phone), reusing the existing parts' ids in order and
+new ids only after the last one, and every changed part gets a `PUT`; nothing already in a later part is lost. Each part
 has its own recap; clients and the evening routine merge a day's parts by time. A day this long is rare: 20000
 sentences is about 16 hours of continuous talk.
 
@@ -368,7 +372,7 @@ The recap is `detail.recap`, present once one was written:
   "generated_at": "2026-11-11T13:00:41Z",
   "day": "2026-11-11",
   "covers": {"from": 0, "to": 46800.0},  // seconds since started_at: the end of the last chunk it read
-  "final": false,                     // true when made after the day closed ("When a recap is due")
+  "final": false,                     // true when made from the complete recording, or 6 h or more after its day ended
   "final_reason": "complete",         // with final: "complete" or "cutoff"
   "summary": "Mostly the export release: …",   // two or three sentences
   "timeline": [
@@ -456,7 +460,7 @@ target reads what the hub holds when it runs; the recap's `covers` says how far 
 - **when the recording becomes `complete`**: the final recap (`final_reason: complete`);
 - **6 hours after its day ended** when it is not complete by then: a final recap of what arrived (`final_reason:
   cutoff`); a later `complete` writes another final recap;
-- **on `POST …/minutes`**;
+- **on `POST …/minutes`** (final only when the recording is complete, or its day ended 6 hours or more before);
 - **at once after a `PUT` that set a new base while a recap exists or is due** (an erase or repair): and until it is
   rewritten, the hub removes from `recap.json`, `recap.md`, `detail.summary` and the search index every timeline entry
   whose range overlaps an `erased` gap of the new coverage (its title may quote the erased words), every point and
@@ -513,9 +517,10 @@ the user either way.
 - **Audio** never reaches the hub. On the phone it is deleted at the earliest of: 3 days after the day's first final
   recap (`recap_final_at` in reconciliation), 7 days after its `day`,
   and `recording_days` after its `day`. On the watch an acknowledged chunk is deleted at once, and an unacknowledged
-  one `recordingDayKeepDays` after its `day` (reported `lost`): the only age-based loss. The phone drops (and
-  acknowledges) a chunk that arrives more than `min(7, recording_days)` days after its `day`; a later chunk still
-  inside that is transcribed and appended even after a final recap (the next final recap includes it).
+  one `recordingDayKeepDays` after its `day` (reported `lost`): the only age-based loss. A chunk that arrives
+  after the phone's own deadline for that day's audio (the earliest of the three above) is acknowledged, discarded
+  and settled as `lost`; one that arrives before it is transcribed and appended even after a final recap (the next
+  final recap includes it).
 - **Transcript** (`segments.json`, `transcript.md`, `recap_notes.json`) follows `recording_days`, counted from
   `started_at` as for every recording, on the hub and (through reconciliation's `days`) on the phone; the text of a day
   older than that is not uploaded. With a very short `recording_days` the final recap may not come before the
