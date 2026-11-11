@@ -156,6 +156,7 @@ func executionWord(word *syntax.Word) (value string, dynamic bool) {
 		case nil, *syntax.Word, *syntax.DblQuoted:
 		default:
 			dynamic = true
+			out.WriteByte('$')
 			return false
 		}
 		return true

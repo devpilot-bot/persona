@@ -523,6 +523,8 @@ func TestAssistantBypassWrappedCommands(t *testing.T) {
 		`env -S "$PROGRAM"`, `env -S 'env "$C"'`, `eval 'env' '"$C"'`,
 		`eval 'lark-cli im' '+messages-send --text hello'`,
 		`(true); sudo env nice "$C" im +messages-send <<< input`,
+		`(true); e${X}nv true <<< input`,
+		`env F${X}=1 true <<< input`,
 		"env \"$C\" im +messages-send\n)",
 	}
 	for _, shell := range []string{"sh", "bash", "zsh", "dash", "ksh", "fish", "/bin/zsh"} {
