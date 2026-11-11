@@ -134,14 +134,14 @@ func shellScriptIndex(words []string) int {
 	}
 	for i := 1; i < len(words); i++ {
 		option := words[i]
-		if !strings.HasPrefix(option, "-") || option == "--" {
+		if !strings.HasPrefix(option, "-") && !strings.HasPrefix(option, "+") || option == "--" {
 			return -1
 		}
-		if wrapperHasOption("-o -O --rcfile --init-file", option) {
+		if wrapperHasOption("-o -O +o +O --rcfile --init-file", option) {
 			i++
 			continue
 		}
-		if option == "--command" || !strings.HasPrefix(option, "--") && strings.Contains(option[1:], "c") {
+		if option == "--command" || strings.HasPrefix(option, "-") && !strings.HasPrefix(option, "--") && strings.Contains(option[1:], "c") {
 			if i+1 < len(words) {
 				return i + 1
 			}

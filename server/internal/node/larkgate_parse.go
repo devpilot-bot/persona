@@ -126,6 +126,9 @@ func classifyLarkDepth(cmd string, gates []proto.CommandGate, cwd string, risk l
 		if !parsed {
 			v.other = true
 			v.unknown = v.unknown || larkCLIRe.MatchString(s.text)
+			for _, word := range words {
+				v.unknown = v.unknown || strings.ContainsAny(word, "$`*?[]{}")
+			}
 			continue
 		}
 		if len(words) == 0 {
