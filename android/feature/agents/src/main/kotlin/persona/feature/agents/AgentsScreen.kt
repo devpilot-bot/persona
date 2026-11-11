@@ -31,6 +31,7 @@ import androidx.lifecycle.repeatOnLifecycle
 import persona.core.contracts.*
 import persona.core.contracts.api.*
 import persona.core.designsystem.*
+import persona.core.designsystem.icons.PhIcon
 import persona.core.designsystem.icons.PhIcons
 import persona.core.designsystem.icons.PersonaIcons
 import persona.core.domain.sort.*
@@ -106,6 +107,8 @@ internal fun AgentsScreen(
     val snackbar = remember { SnackbarHostState() }
     val feedback = persona.core.designsystem.LocalAppFeedback.current
     var menu by remember { mutableStateOf(false) }
+    // The grouping pill's Group By picker (iOS's), groupings only (#4338 A4).
+    var groupingMenu by remember { mutableStateOf(false) }
     var searchVisible by rememberSaveable { mutableStateOf(false) }
     val homeChrome = LocalHomeChrome.current != null
     val firstPageIncomplete = !page.loaded && page.list.groups.isEmpty()
@@ -283,6 +286,8 @@ internal fun AgentsScreen(
                 if (LocalHomeChrome.current == null) JIconButton(PhIcons.ListChecks, stringResource(R.string.agents_action_todos), { navigator.navigate(persona.core.navigation.TodosRoute) })
                 JIconButton(if (homeChrome) PhIcons.NotePencil else PhIcons.Plus, stringResource(R.string.agents_action_new_session), { newSession() })
                 if (LocalHomeChrome.current == null) JIconButton(PhIcons.SlidersHorizontal, stringResource(R.string.agents_action_list_settings), { menu = true })
+                // With the home chrome the grouping pill picks only the grouping; the rest of the list's settings sit behind ⋯.
+                else JIconButton(PersonaIcons.moreMenu, stringResource(R.string.agents_action_list_settings), { menu = true })
             },
         ) {
             item("search") {
@@ -329,8 +334,9 @@ internal fun AgentsScreen(
             }
             if (homeChrome) item("grouping") {
                 Row(Modifier.padding(horizontal = Tokens.Space.l, vertical = Tokens.Space.xs)) {
-                    JChip(stringResource(R.string.agents_grouping_current, page.preferences.grouping.label),
-                        onClick = { menu = true }, icon = PhIcons.Folder, role = Role.Button, trailingIcon = PhIcons.CaretDown)
+                    // As iOS: the grouping's own icon, its name and a chevron, opening a Group By picker.
+                    JChip(page.preferences.grouping.label, onClick = { groupingMenu = true }, icon = page.preferences.grouping.icon,
+                        role = Role.Button, trailingIcon = PersonaIcons.expand)
                 }
             }
             // "botmux" (web #2786): show or hide botmux's sessions in this list, kept on this phone.
@@ -530,7 +536,7 @@ internal fun AgentsScreen(
         if (archives?.api?.supported == true) add(JAction(stringResource(R.string.agents_archives_title), PhIcons.Archive,
             onClick = { showArchives = true }))
         AgentRange.entries.forEach { range -> add(JAction(stringResource(R.string.agents_menu_range, range.label), checked = page.preferences.range == range, onClick = { model.range(range) })) }
-        AgentGrouping.selectable.forEach { grouping -> add(JAction(grouping.label, checked = page.preferences.grouping == grouping, onClick = { model.grouping(grouping) })) }
+        if (!homeChrome) AgentGrouping.selectable.forEach { grouping -> add(JAction(grouping.label, checked = page.preferences.grouping == grouping, onClick = { model.grouping(grouping) })) }
         AgentSort.entries.forEachIndexed { index, sort -> add(JAction(stringResource(R.string.agents_menu_sort, sort.label), icon = sort.icon,
             checked = page.preferences.sort == sort, separatorBefore = index == 0, onClick = { model.sort(sort) })) }
         add(JAction(stringResource(R.string.agents_menu_compact), checked = page.preferences.compact, onClick = { if (!page.preferences.compact) model.compact() }))
@@ -543,6 +549,9 @@ internal fun AgentsScreen(
         if (terminalPanes) add(JAction(stringResource(R.string.agents_menu_terminals), icon = PhIcons.TerminalWindow,
             onClick = { navigator.navigate(persona.core.navigation.TerminalPanesRoute) }))
     }, { menu = false }, title = stringResource(R.string.agents_action_list_settings), note = stringResource(R.string.agents_menu_note))
+    if (groupingMenu) JActionSheet(AgentGrouping.selectable.map { grouping ->
+        JAction(grouping.label, grouping.icon, checked = page.preferences.grouping == grouping, onClick = { model.grouping(grouping) })
+    }, { groupingMenu = false }, title = stringResource(R.string.agents_group_by))
     archiveTarget?.let { target ->
         JDialog(onDismiss = { archiveTarget = null }, title = stringResource(R.string.agents_action_archive),
             text = stringResource(R.string.agents_archive_confirm, target.displayTitle),
@@ -899,6 +908,16 @@ internal val RepoLevel.icon get() = when (this) {
     RepoLevel.MainCheckout -> PhIcons.House
     RepoLevel.Worktree -> PhIcons.GitBranch
 }
+/** The grouping's own icon, as iOS's `DevGrouping.symbol`. */
+private val AgentGrouping.icon: PhIcon get() = when (this) {
+    AgentGrouping.Repo -> PersonaIcons.folder
+    AgentGrouping.MachineSpace, AgentGrouping.Space -> PersonaIcons.space
+    AgentGrouping.Todo -> PersonaIcons.todo
+    AgentGrouping.Machine -> PersonaIcons.machine
+    // iOS draws two state dots (circle.grid.2x1), which no generated glyph shows; a board of columns stands in.
+    AgentGrouping.State -> PhIcons.Kanban
+}
+
 private val AgentGrouping.label: String @Composable get() = stringResource(when (this) {
     AgentGrouping.Repo -> R.string.agents_grouping_repo
     AgentGrouping.State -> R.string.agents_grouping_state
