@@ -16,13 +16,13 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
-import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -32,6 +32,7 @@ import persona.core.contracts.*
 import persona.core.contracts.api.*
 import persona.core.designsystem.*
 import persona.core.designsystem.icons.PhIcons
+import persona.core.designsystem.icons.PersonaIcons
 import persona.core.domain.sort.*
 import persona.core.domain.answer.firstBySession
 import persona.core.domain.answer.rowLine
@@ -313,6 +314,18 @@ internal fun AgentsScreen(
                 HomeAgentFilters(shown.map { filter ->
                     Bay(filter.label, if (filter == AgentQuickFilter.All) page.allCount else page.list.counts[filter] ?: 0, filter.state?.designStatus)
                 }, shown.indexOf(page.settings.quick), { model.filter(shown[it]) }, Modifier.padding(vertical = Tokens.Space.s))
+            }
+            // The computer the list is narrowed to (iOS's "Only <computer>", #1659): with the shared home chrome the computer
+            // is chosen in a sheet and its chips don't show, so nothing else on the page says so. A tap shows every computer.
+            if (homeChrome && page.settings.machineFilter.isNotEmpty()) item("machine-filter") {
+                val name = names[page.settings.machineFilter] ?: page.settings.machineFilter
+                val hint = stringResource(R.string.agents_only_machine_hint)
+                Row(Modifier.padding(horizontal = Tokens.Space.l, vertical = Tokens.Space.xs)) {
+                    JChip(stringResource(R.string.agents_only_machine, name), Modifier.testTag("agents-machine-filter")
+                        .semantics { onClick(label = hint) { model.machine(""); onMachineSelected(""); true } },
+                        selected = true, onClick = { model.machine(""); onMachineSelected("") },
+                        role = Role.Button, trailingIcon = persona.core.designsystem.icons.PersonaIcons.clear)
+                }
             }
             if (homeChrome) item("grouping") {
                 Row(Modifier.padding(horizontal = Tokens.Space.l, vertical = Tokens.Space.xs)) {
@@ -773,6 +786,8 @@ internal fun SlotRow(
             }
         },
         flags = buildList {
+            // Claude Code's ultracode on (#582, iOS UltracodeMark): the workflow mark right after the title.
+            if (ultracodeMark(session)) add(RowFlag(stringResource(R.string.agents_row_ultracode), PersonaIcons.workflow, ai = true))
             if (pinned) add(RowFlag(stringResource(R.string.agents_row_pinned), PhIcons.PushPin))
             if (muted) add(RowFlag(stringResource(R.string.agents_row_muted), PhIcons.Prohibit))
             // Its closeout (#3612): the hub found a claim untrue (the line says which), or the turn is not finished.
@@ -837,7 +852,7 @@ internal fun AgentSessionMenuItems(
     onUnlinkTodo: (() -> Unit)? = null,
     onDelete: (() -> Unit)? = null,
 ): List<JAction> {
-    val clipboard = LocalClipboardManager.current
+    val copy = rememberCopy()
     val session = row.session
     return buildList {
         add(JAction(stringResource(if (pinned) R.string.agents_action_unpin else R.string.agents_action_pin), PhIcons.PushPin, enabled = !busy, onClick = onPin))
@@ -856,8 +871,8 @@ internal fun AgentSessionMenuItems(
         add(JAction(stringResource(R.string.agents_action_handoff), onClick = onHandoff))
         if (row.state == AgentState.Unread) add(JAction(stringResource(R.string.agents_action_mark_read), PhIcons.Check, onClick = onRead))
         // Only a session in a terminal resumes there; a Codex thread by its own thread id.
-        session.resumeCommand()?.let { command -> add(JAction(stringResource(R.string.agents_action_copy_resume), onClick = { clipboard.setText(AnnotatedString(command)) })) }
-        add(JAction(stringResource(R.string.agents_action_copy_directory), enabled = session.cwd.isNotBlank(), onClick = { clipboard.setText(AnnotatedString(session.cwd)) }))
+        session.resumeCommand()?.let { command -> add(JAction(stringResource(R.string.agents_action_copy_resume), onClick = { copy(command, null) })) }
+        add(JAction(stringResource(R.string.agents_action_copy_directory), enabled = session.cwd.isNotBlank(), onClick = { copy(session.cwd, null) }))
         add(JAction(stringResource(R.string.agents_action_open_session), onClick = onOpen))
         if (session.isLive && session.canTerminal) add(JAction(stringResource(R.string.agents_action_close_agent), destructive = true, enabled = !busy, onClick = onClose))
         if (session.canDelete && onDelete != null) add(JAction(stringResource(R.string.agents_action_delete_chat), destructive = true, enabled = !busy, onClick = onDelete))
