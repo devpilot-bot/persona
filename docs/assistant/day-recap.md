@@ -146,7 +146,7 @@ without guessing from gaps between chunks:
 | `started` | `at` | The microphone opened (first start, continue after a pause, after an interruption) |
 | `paused` | `at`, `reason` | The microphone closed: `paused` (the user paused or turned All-Day Recording off), `interrupted` (a call, Siri or another app took it), `stopped` (it stopped by itself: battery, storage, a crash found at the next launch) |
 | `lost` | `from_seq`, `to_seq`, `from`?, `to`? | Chunks the watch could not keep (a crash while writing, an unreadable file, the age limit below), with their times when known; without them the phone takes the gap from the end of the chunk before to the start of the chunk after |
-| `erase` | `id`, `from`, `to`, `seqs` | The user erased this wall-clock range on the watch ("Erasing"); `seqs` (`[[from, to]]`) are the chunks the watch dropped without sending, which count as settled |
+| `erase` | `id`, `from`, `to`, `seqs` | The user erased this wall-clock range on the watch ("Erasing"); `seqs` (`[[from, to]]`) are the chunks the erase deleted before the phone acknowledged them (sent or not), which count as settled |
 | `closed` | `at`, `seq_count` | The day recording ended (midnight, or deleted): no chunk at or after `seq_count` will come |
 
 - `n` is 0, 1, 2, … per day recording. Events go like chunks: a message while reachable, `transferUserInfo`
@@ -177,14 +177,14 @@ without guessing from gaps between chunks:
 
 - **Erase the last 10 minutes** on the watch: the watch closes and erases the chunk being written, deletes the chunks
   it still holds that overlap the range, and sends an `erase` event with a fresh `id`, the wall-clock range and the
-  `seqs` it dropped unsent. The phone keeps erased ranges per day recording (as rolling recording's `erased` does),
+  `seqs` of every chunk it deleted before the phone acknowledged it. The phone keeps erased ranges per day recording (as rolling recording's `erased` does),
   deletes the audio and sentences that overlap them, drops any later chunk that overlaps them, and repairs the hub with
   a `PUT` ("Phone to hub") that keeps every other sentence's position (an empty segment in place of each erased one).
 - **On the phone**, the same erase applies to its copies and the hub, and the phone sends
   `{"recording", "erase": {"id", "from", "to"}}` to the watch (message, or `transferUserInfo`), which closes and erases
   the chunk being written when it overlaps, deletes the chunks it holds in the range and confirms with
-  `{"recording", "erased": "<id>", "seqs": [[from, to]]}` (the chunks it dropped unsent, settled like an `erase`
-  event's); the phone resends until confirmed.
+  `{"recording", "erased": "<id>", "seqs": [[from, to]]}` (every chunk it deleted before the phone acknowledged it,
+  settled like an `erase` event's); the phone resends until confirmed.
 - An erase that spans midnight applies to both day recordings.
 
 ### Deleting
@@ -457,9 +457,10 @@ target reads what the hub holds when it runs; the recap's `covers` says how far 
   cutoff`); a later `complete` writes another final recap;
 - **on `POST …/minutes`**;
 - **at once after a `PUT` that set a new base while a recap exists or is due** (an erase or repair): and until it is
-  rewritten, the hub removes from `recap.json`, `recap.md`, `detail.summary` and the search index every point and
-  action whose `at` no longer starts a line of the new transcript or falls in an `erased` gap of the new coverage, the
-  entries left without points, and the `summary` (it may quote the erased words). Confirmed to-dos stay.
+  rewritten, the hub removes from `recap.json`, `recap.md`, `detail.summary` and the search index every timeline entry
+  whose range overlaps an `erased` gap of the new coverage (its title may quote the erased words), every point and
+  action whose `at` no longer starts a non-empty line of the new transcript, the entries left without points, and the
+  `summary`. Confirmed to-dos stay.
 
 A day with no text when a recap comes due gets none (`recap_state` stays absent). The recap is one merge call over the
 notes, with the day's known meetings as hints (the user's meeting recordings overlapping it, `meetings` and `events`
