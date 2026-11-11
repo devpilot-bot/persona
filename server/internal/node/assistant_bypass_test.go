@@ -438,7 +438,7 @@ func TestAssistantBypassOrdinaryCommands(t *testing.T) {
 		"./program.py",
 		"./program.js",
 		`sh -c 'echo {a,b}'`,
-		`eval "$PROGRAM"`,
+		`env FOO=1 go test ./...`,
 		`echo $(printf hi)`,
 		`echo $(echo {a,b})`,
 		`cat <<< "$HOME"`,
@@ -486,6 +486,69 @@ func TestAssistantBypassCLIControls(t *testing.T) {
 		"lark\\-cli im +messages-send --text hello\n)",
 	} {
 		t.Run(command, func(t *testing.T) { assertAssistantBypassClassification(t, command, 1) })
+	}
+}
+
+// Both adapters classify the same table; the strings never enter a shell.
+func TestAssistantBypassWrappedCommands(t *testing.T) {
+	blocked := []string{
+		`env "$C" im +messages-send --text hello`,
+		`sudo "$C" im +messages-send --text hello`,
+		`nice "$C" im +messages-send --text hello`,
+		`nohup "$C" im +messages-send --text hello`,
+		`exec "$C" im +messages-send --text hello`,
+		`command "$C" im +messages-send --text hello`,
+		`xargs "$C" im +messages-send --text hello`,
+		`busybox "$C" im +messages-send --text hello`,
+		`setsid "$C" im +messages-send --text hello`,
+		`time "$C" im +messages-send --text hello`,
+		`env $(printf '%s' "$C") im +messages-send --text hello`,
+		`sudo $(printf '%s' "$C") im +messages-send --text hello`,
+		`eval "$C"`, `eval $C`, `eval "$PROGRAM"`,
+		`builtin eval "$C"`, `command eval "$C"`,
+		"eval \"`printf '%s' \\\"$C\\\"`\"",
+		`busybox sh -c "$C"`,
+		`timeout -s TERM 5 "$C" im +messages-send --text hello`,
+		`timeout --preserve-status 5 "$C" im +messages-send --text hello`,
+		`C=lark-cli; env "$C" im +messages-send --text hello`,
+		`C=lark-cli; eval "$C"`, `sudo env "$C" im +messages-send --text hello`,
+		`true | env "$C" im +messages-send --text hello`, `echo hi && eval "$C"`,
+		`sudo env nice "$C" im +messages-send --text hello`,
+		`timeout 5 $C im +messages-send --text hello`, `xargs -I{} $C im +messages-send --text hello`,
+		`exec "$C"`, `command $C`, `source "$C"`, `. "$C"`,
+		`stdbuf -oL "$C" im +messages-send --text hello`,
+		`env FOO=1 -u BAR "$C" im +messages-send --text hello`,
+		`sudo -u "$USER" -n env FOO=1 nice -n5 "$C"`,
+		`env --unknown-option value "$C"`, `sudo --unknown-option value lark-cli im +messages-send`,
+		`env -S "$PROGRAM"`, `eval 'env' '"$C"'`,
+		`eval 'lark-cli im' '+messages-send --text hello'`,
+		`(true); sudo env nice "$C" im +messages-send <<< input`,
+		"env \"$C\" im +messages-send\n)",
+	}
+	for _, shell := range []string{"sh", "bash", "zsh", "dash", "ksh", "fish", "/bin/zsh"} {
+		for _, option := range []string{"-c", "-lc", "-cl", "-e -c"} {
+			blocked = append(blocked, shell+" "+option+` "$C"`, shell+" "+option+` 'env "$C" im +messages-send'`)
+		}
+	}
+	for _, command := range blocked {
+		t.Run(command, func(t *testing.T) { assertAssistantBypassClassification(t, command, 1) })
+	}
+	for _, command := range []string{
+		`sudo -n true`, `timeout 5 npm test`, `echo $(date)`, `xargs echo`,
+		`env HOME="$C" echo hi`, `sudo -u "$C" true`, `echo "$C"`,
+		`timeout -k 1 5 echo hi`, `xargs -I{} echo {}`, `exec -a "$C" true`,
+		`stdbuf -oL echo hi`, `env -u FOO FOO=1 go test ./...`,
+		`sudo env nice -n5 true`, `command -v "$C"`, `eval 'echo "$C"'`,
+		`env --unknown-option true`,
+		`env lark-cli docs +fetch`, `sudo -n lark-cli docs +fetch`,
+	} {
+		t.Run(command, func(t *testing.T) { assertAssistantBypassClassification(t, command, 0) })
+	}
+	for _, shell := range []string{"sh", "bash", "zsh", "dash", "ksh", "fish"} {
+		for _, script := range []string{`'echo "$C"'`, `'echo hi'`, `'lark-cli docs +fetch'`} {
+			command := shell + " -lc " + script
+			t.Run(command, func(t *testing.T) { assertAssistantBypassClassification(t, command, 0) })
+		}
 	}
 }
 
