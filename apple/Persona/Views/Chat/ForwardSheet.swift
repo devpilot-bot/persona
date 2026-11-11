@@ -68,8 +68,8 @@ struct ForwardSheet: View {
                     Text(error).font(Theme.Font.caption).foregroundStyle(Theme.danger)
                 }
             }
-            .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always),
-                        prompt: Text("Search chats, computers or projects"))
+            .pageSearchable(text: $query, placement: .navigationBarDrawer(displayMode: .always),
+                            prompt: String(localized: "Search chats, computers or projects"))
             .navigationTitle("Forward To")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
