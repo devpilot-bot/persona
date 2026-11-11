@@ -2325,6 +2325,7 @@ struct ChatView: View {
                 }
                 Composer(key: key, status: status, placeholder: style == .assistant ? String(localized: "Ask \(model.assistantDisplayName)…") : String(localized: "Message \(session?.agentLabel ?? "Claude") [Chat View c6f021]"),
                          onCleared: { switchTo($0) }, onFocus: { composerTyping = $0 })
+                    .environment(\.composerCovered, link != nil)
                     // The shell's expanding field stays in the page's layout graph; so does BeautifulUI's prompt bar,
                     // whose menus hang above it: an island's hosting view takes no touches outside its bounds.
                     .layoutIsland(enabled: !usesShellComposer && !AppStyle.current.usesBeautifulUI)
@@ -4142,10 +4143,17 @@ enum ChatComposerKind {
     static var card: Bool { macCard || padCard }
 }
 
+extension EnvironmentValues {
+    /// The link card covers the chat (ChatView's `link`): the composer takes a picture handed to it (a preview's
+    /// screenshot, #150) without raising the keyboard, which would close the card.
+    @Entry var composerCovered = false
+}
+
 struct Composer: View, Equatable {
     /// Where a refused send's card button goes (`ReadinessSheets`).
     @State private var failureRoute: ReadinessRoute?
     @Environment(\.scenePhase) private var phase
+    @Environment(\.composerCovered) private var covered
     /// What the page hands in; the rest it reads from the model itself. The page re-evaluates on every hub push for its
     /// conversation, and the composer (a text field, its buttons, the mode chips) used to go with it.
     nonisolated static func == (a: Self, b: Self) -> Bool {
@@ -4786,7 +4794,7 @@ struct Composer: View, Equatable {
             guard n > 0, let incoming = model.composerInbox[key] else { return }
             model.composerInbox[key] = nil
             for img in incoming { add(img) }
-            focused = true
+            if !covered { focused = true }
         }
         #if os(macOS)
         // Files dropped on the chat's page, not on the box (`macChatDrop`): as if dropped here.
