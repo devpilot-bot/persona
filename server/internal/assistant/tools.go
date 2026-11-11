@@ -166,6 +166,11 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		if err := json.Unmarshal(args, &a); err != nil || strings.TrimSpace(a.Title+a.Body) == "" {
 			return "", fmt.Errorf("title and body are required")
 		}
+		if s.justMeNow(machine, self) {
+			// A Just me turn (meeting_justme.go): no push and no copy anywhere; the text stays in the conversation,
+			// which the meeting page shows.
+			return justMeNotice(s.lang(ctx)), nil
+		}
 		if s.inHealth(ctx, self) { // the lock screen and the channels hear there is news, not what it is (health.go)
 			a.Title, a.Body = healthNotice(s.lang(ctx))
 		}
@@ -268,6 +273,8 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			if err := s.sendTaskAllowed(ctx, self, am, c, *a.Task, a.Text); err != nil {
 				return "", err
 			}
+		} else if err := s.exitAllowed(ctx, self, am, c, a.Text, len(atts)); err != nil {
+			return "", err
 		}
 		if ok, err := s.confirmOutbound(ctx, machine, self, name, agentLabel(c)+" · "+am.Name+"\n\n"+a.Text, args); err != nil {
 			return "", err
@@ -282,11 +289,20 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		}
 		text := a.Text
 		if a.Task == nil {
-			if err := s.ensureTodosLoaded(ctx); err != nil {
+			if t, theirs, err := s.supervisedElsewhere(ctx, self, am, c); err != nil {
 				return "", err // Unknown task ownership must not strip message provenance.
-			}
-			if assigned, ok := s.taskOf(ctx, am.ID, c.SessionID); ok && assigned.Supervision != nil && assigned.Supervision.Supervisor != self {
+			} else if theirs {
+				// Read after the phone: the agent may have become another conversation's task while the user was asked.
+				if err := exitRefused(c, t, a.Text, len(atts)); err != nil {
+					return "", err
+				}
 				text = prompts.RenderSideConversation(prompts.SideConversation{From: self, Text: a.Text})
+			}
+		}
+		if a.Task != nil {
+			text, err = s.withStandingAuthorizations(ctx, am.ID, c.Cwd, text)
+			if err != nil {
+				return "", task.sendFailed(ctx, s, err)
 			}
 		}
 		// The user's attachments, copied to the agent's computer when it is another one: the text ends with them, the
