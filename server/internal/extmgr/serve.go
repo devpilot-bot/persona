@@ -485,10 +485,11 @@ func (h *Manager) hubCall(ctx context.Context, method string, params json.RawMes
 		}
 		actor := "extension:" + au.Extension
 		if au.Action == extwire.AuditSecretHandoffRefused { // the provider's record of someone else's try
-			if !h.extensions.isSecretProvider(au.Extension) {
+			id, ok := h.extensions.secretProviderID(au.Extension)
+			if !ok {
 				return nil, &rpc.Error{Code: bus.CodeInvalidParams, Message: "extensions: " + au.Extension + " is no secret provider here"}
 			}
-			actor = handoffActor(au.Actor)
+			au.Extension, actor = id, handoffActor(au.Actor) // under its current id, where its page reads it
 		}
 		h.audit(ctx, au.Extension, au.Action, actor, au.Detail)
 		return map[string]any{}, nil
@@ -733,13 +734,17 @@ func (h *Manager) extensionLooks() []extwire.LookPackage {
 	return out
 }
 
-// isSecretProvider: id is an installed extension that contributes a secret provider, switched on or not.
-func (ps *extensions) isSecretProvider(id string) bool {
+// secretProviderID is the current id of installed extension id (an old alias's too) when it contributes a secret
+// provider, switched on or not.
+func (ps *extensions) secretProviderID(id string) (string, bool) {
 	if ps == nil || ps.reg == nil {
-		return false
+		return "", false
 	}
 	p := ps.reg.Snapshot(id)
-	return p != nil && p.Manifest != nil && len(p.Manifest.SecretProviders()) > 0
+	if p == nil || p.Full == nil || len(p.Full.SecretProviders()) == 0 {
+		return "", false
+	}
+	return p.Record.ID, true
 }
 
 // handoffActor is who the hub says tried to approve a hand-off card, as the other records name an actor ("device:<id>",

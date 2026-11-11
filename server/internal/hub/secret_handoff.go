@@ -10,9 +10,11 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/bus"
 	"github.com/nwverse/persona/server/internal/extwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 // The hand-off card's gate (docs/extensions/secret-providers.md "Who may approve a hand-off"). A hand-off card
@@ -51,7 +53,8 @@ type handoffRecorded struct {
 	seen map[string]time.Time
 }
 
-// first reports whether key was not recorded in the last handoffRecordEvery, and remembers it now.
+// first reports whether key was not recorded in the last handoffRecordEvery, and remembers it now. When full it forgets
+// the stale keys, else the oldest: a flood of other keys never stops a new one being recorded.
 func (m *handoffRecorded) first(key string, now time.Time) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -59,13 +62,16 @@ func (m *handoffRecorded) first(key string, now time.Time) bool {
 		return false
 	}
 	if len(m.seen) >= handoffRecordMost {
+		oldest, oldestAt := "", now
 		for k, at := range m.seen {
 			if now.Sub(at) >= handoffRecordEvery {
 				delete(m.seen, k)
+			} else if !at.After(oldestAt) {
+				oldest, oldestAt = k, at
 			}
 		}
 		if len(m.seen) >= handoffRecordMost {
-			return false
+			delete(m.seen, oldest)
 		}
 	}
 	if m.seen == nil {
@@ -73,6 +79,13 @@ func (m *handoffRecorded) first(key string, now time.Time) bool {
 	}
 	m.seen[key] = now
 	return true
+}
+
+// forget drops key: what first remembered was not recorded after all.
+func (m *handoffRecorded) forget(key string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.seen, key)
 }
 
 // Why a request may not approve a hand-off card (the record's reason).
@@ -149,7 +162,8 @@ func (h *Hub) refuseHandoff(w http.ResponseWriter, r *http.Request, ix proto.Int
 	}
 	defer writeErrCode(w, http.StatusForbidden, proto.CodeSecretHandoffElsewhere,
 		errors.New(i18n.T(h.requestLang(r), "hub-secret_handoff.approve_elsewhere")))
-	if !h.handoffRecorded.first(ix.ID+"\x00"+actor+"\x00"+why, time.Now()) {
+	key := rowText(ix.ID, 128) + "\x00" + rowText(actor, 160) + "\x00" + why
+	if !h.handoffRecorded.first(key, time.Now()) {
 		return // recorded lately
 	}
 	h.logf("hand-off card %s: an approval from %s refused (%s)", clip(ix.ID, 64), clip(actor, 96), why)
@@ -160,11 +174,22 @@ func (h *Hub) refuseHandoff(w http.ResponseWriter, r *http.Request, ix proto.Int
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 5*time.Second)
 	defer cancel()
 	manager := cmp.Or(ix.Manager, assistantwire.AssistantID)
+	recorded, passing := false, false
 	for _, prov := range providers {
 		audit := extwire.Audit{Extension: prov, Action: extwire.AuditSecretHandoffRefused, Actor: actor, Detail: detail}
-		if err := h.extCallTo(ctx, manager, extwire.HubAudit, audit, nil); err != nil {
-			h.logf("hand-off card %s: the refusal is not recorded on %s: %v", clip(ix.ID, 64), clip(prov, 64), err)
+		err := h.extCallTo(ctx, manager, extwire.HubAudit, audit, nil)
+		if err == nil {
+			recorded = true
+			continue
 		}
+		h.logf("hand-off card %s: the refusal is not recorded on %s: %v", clip(ix.ID, 64), clip(prov, 64), err)
+		var coded *rpc.Error
+		if !errors.As(err, &coded) || coded.Code != bus.CodeInvalidParams {
+			passing = true // the manager away or slow, not a provider it does not have
+		}
+	}
+	if !recorded && passing {
+		h.handoffRecorded.forget(key) // the next try records it
 	}
 }
 

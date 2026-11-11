@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/bus"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/extension"
 	"github.com/nwverse/persona/server/internal/extwire"
@@ -27,6 +28,8 @@ type handoffManager struct {
 	relayed []assistantwire.HTTPRequest
 	audits  []extwire.Audit
 	raw     []string // the audits' params as they came
+	fail    error    // what an audit is answered, when set (nothing recorded)
+	tries   int      // the audits asked
 }
 
 func (m *handoffManager) handle(_ context.Context, method string, params json.RawMessage) (any, error) {
@@ -52,8 +55,12 @@ func (m *handoffManager) handle(_ context.Context, method string, params json.Ra
 				return nil, err
 			}
 			m.mu.Lock()
+			defer m.mu.Unlock()
+			m.tries++
+			if m.fail != nil {
+				return nil, m.fail
+			}
 			m.audits, m.raw = append(m.audits, a), append(m.raw, string(c.Params))
-			m.mu.Unlock()
 		}
 		return map[string]any{}, nil
 	}
@@ -268,6 +275,40 @@ func TestOnlyADeviceThatShowsTheHandoffCardApprovesIt(t *testing.T) {
 		t.Fatalf("choose relayed %+v", relayed)
 	}
 
+	// A record the manager could not take (away, slow) is asked again on the next try; one for a provider it does not
+	// have is not.
+	reportInteraction(t, h, handoffCard("ix_handoff_later", proto.IxPermission))
+	tries := func() int {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		return m.tries
+	}
+	for _, c := range []struct {
+		fail  error
+		again int
+	}{
+		{&rpc.Error{Code: "unavailable", Message: "busy"}, 2},
+		{&rpc.Error{Code: bus.CodeInvalidParams, Message: "no secret provider here"}, 0},
+	} {
+		m.mu.Lock()
+		m.fail = c.fail
+		m.mu.Unlock()
+		tok := watchTok
+		if c.again == 0 {
+			tok = phoneTok
+		}
+		before := tries()
+		post(tok, "ix_handoff_later", `{"allow":true}`)
+		post(tok, "ix_handoff_later", `{"allow":true}`)
+		if got := tries() - before; got != 2+c.again {
+			t.Fatalf("%v: %d audits asked over two tries, want %d", c.fail, got, 2+c.again)
+		}
+	}
+	m.mu.Lock()
+	m.fail = nil
+	m.mu.Unlock()
+	m.took()
+
 	// Its push has no buttons: a tap opens the card.
 	aps := interactionPayloadIn(i18n.En, handoffCard("ix_handoff", proto.IxPermission), "box")["aps"].(map[string]any)
 	if aps["category"] != "INTERACTION_INPUT" {
@@ -331,13 +372,25 @@ func TestHandoffRefusalsRecordedOnce(t *testing.T) {
 	if !m.first("ix\x00device:d\x00client", now.Add(handoffRecordEvery)) {
 		t.Fatal("not recorded again after the window")
 	}
+	at := now.Add(handoffRecordEvery)
 	for i := range handoffRecordMost {
-		m.first(fmt.Sprint("fill", i), now.Add(handoffRecordEvery))
+		m.first(fmt.Sprint("fill", i), at.Add(time.Duration(i)*time.Millisecond))
 	}
-	if m.first("one more", now.Add(handoffRecordEvery)) {
-		t.Fatal("remembered past the bound")
+	full := at.Add(time.Second)
+	if !m.first("one more", full) || len(m.seen) != handoffRecordMost {
+		t.Fatalf("a new key when full: %d remembered", len(m.seen))
 	}
-	if !m.first("one more", now.Add(3*handoffRecordEvery)) || len(m.seen) > handoffRecordMost {
+	if _, kept := m.seen["fill0"]; kept {
+		t.Fatal("the oldest was not the one forgotten")
+	}
+	if m.first("one more", full.Add(time.Second)) || m.first("fill1", full.Add(time.Second)) {
+		t.Fatal("a key remembered was recorded again")
+	}
+	if !m.first("last", full.Add(3*handoffRecordEvery)) || len(m.seen) != 1 {
 		t.Fatalf("the stale were not dropped: %d remembered", len(m.seen))
+	}
+	m.forget("last")
+	if !m.first("last", full.Add(3*handoffRecordEvery)) {
+		t.Fatal("a forgotten key was not recorded again")
 	}
 }
