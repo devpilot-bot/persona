@@ -42,6 +42,16 @@ final class ExternalConversationsTests: XCTestCase {
         XCTAssertTrue(group.waitForExistence(timeout: 10), "no 自动对话 row:\n\(app.debugDescription)")
     }
 
+    /// A row below the fold: the sidebar draws only the rows on screen, and the pages above Auto Chats push its last
+    /// rows off a phone's screen. Scrolls the sidebar up until it is there.
+    @MainActor private func reveal(_ e: XCUIElement) -> Bool {
+        for _ in 0..<4 {
+            if e.exists && e.isHittable { return true }
+            app.swipeUp(velocity: .slow)
+        }
+        return e.exists
+    }
+
     @MainActor private func shot(_ name: String) {
         let a = XCTAttachment(screenshot: app.screenshot())
         a.name = name
@@ -60,7 +70,7 @@ final class ExternalConversationsTests: XCTestCase {
             if !app.buttons["sidebar-auto-inbox"].exists { group.tap() }
             let lark = app.buttons["sidebar-auto-lark_agent"].firstMatch
             XCTAssertTrue(lark.waitForExistence(timeout: 3), "no 飞书 /agent row")
-            XCTAssertTrue(app.buttons["sidebar-auto-extension"].exists, "no 扩展 row")
+            XCTAssertTrue(reveal(app.buttons["sidebar-auto-extension"]), "no 扩展 row")
             XCTAssertFalse(app.buttons.matching(identifier: "sidebar-conversation")
                 .matching(NSPredicate(format: "label BEGINSWITH %@", "1105 | 研究 | 群里的需求")).firstMatch.exists,
                            "an external conversation is in 最近")
@@ -68,6 +78,7 @@ final class ExternalConversationsTests: XCTestCase {
             shot("sidebar-\(scheme)")
 
             // All Chats filtered to Lark /agent: its row says where it came from.
+            XCTAssertTrue(lark.waitForExistence(timeout: 2), "the 飞书 /agent row went away") // a tap scrolls it into view
             lark.tap()
             let rows = app.buttons.matching(identifier: "auto-conversation")
             XCTAssertTrue(rows.firstMatch.waitForExistence(timeout: 5), "the list did not open")
