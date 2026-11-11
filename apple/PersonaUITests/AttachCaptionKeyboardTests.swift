@@ -51,8 +51,7 @@ final class AttachCaptionKeyboardTests: XCTestCase {
         let caption = app.descendants(matching: .any)["attach-caption"].firstMatch
         XCTAssertTrue(caption.waitForExistence(timeout: 5), "picking a photo shows the caption:\n\(app.debugDescription)")
         let keyboard = app.keyboards.firstMatch
-        let grid = app.descendants(matching: .any)["attach-grid"].firstMatch
-        clearDraft(caption, keyboard: keyboard, grid: grid)
+        clearDraft(app, caption, keyboard: keyboard)
         settle()
         shot(app, "attach-caption-down")
         let resting = caption.frame
@@ -83,7 +82,7 @@ final class AttachCaptionKeyboardTests: XCTestCase {
         let back = Date().addingTimeInterval(5)
         while caption.frame.maxY > keys, Date() < back { RunLoop.current.run(until: Date().addingTimeInterval(0.2)) }
         XCTAssertLessThanOrEqual(caption.frame.maxY, keys, "the caption is back on the keyboard after typing")
-        grid.swipeDown() // at its top: it bounces, and the drag is enough
+        dragGrid(app) // at its top: it bounces, and the drag is enough
         XCTAssertTrue(keyboard.waitForNonExistence(timeout: 5), "dragging the grid puts the keyboard away")
         settle()
         shot(app, "attach-caption-back")
@@ -93,19 +92,28 @@ final class AttachCaptionKeyboardTests: XCTestCase {
         // At rest the sheet is drawn a little smaller (`AttachSheetPhysics.scale`); open, its caption sits a few points lower.
         XCTAssertGreaterThanOrEqual(caption.frame.maxY, resting.maxY - 2, "the caption (\(caption.frame)) goes back down to the bottom (\(resting) at rest)")
         XCTAssertLessThanOrEqual(caption.frame.maxY, app.frame.maxY, "the caption (\(caption.frame)) stays on the screen")
-        clearDraft(caption, keyboard: keyboard, grid: grid) // the caption is the composer's draft: leave it as it was
+        clearDraft(app, caption, keyboard: keyboard) // the caption is the composer's draft: leave it as it was
         sleep(2) // drafts are saved a moment after the last change
     }
 
     /// Empties the caption (the composer's draft, kept across runs), and puts the keyboard away again.
-    @MainActor private func clearDraft(_ caption: XCUIElement, keyboard: XCUIElement, grid: XCUIElement) {
+    @MainActor private func clearDraft(_ app: XCUIApplication, _ caption: XCUIElement, keyboard: XCUIElement) {
         let value = caption.value as? String ?? ""
         guard !value.isEmpty, value != caption.placeholderValue else { return }
         caption.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.9)).tap()
         _ = keyboard.waitForExistence(timeout: 5)
         caption.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: value.count + 2))
-        grid.swipeDown()
+        dragGrid(app)
         _ = keyboard.waitForNonExistence(timeout: 5)
+    }
+
+    /// Drags the grid down in the part the keyboard leaves showing, between the panel's header and the caption. Not
+    /// `swipeDown()`: it starts at the grid's middle, which on a small phone at the largest text sizes is under the caption.
+    @MainActor private func dragGrid(_ app: XCUIApplication) {
+        let top = app.buttons["attach-close"].firstMatch.frame.maxY
+        let gap = app.descendants(matching: .any)["attach-caption"].firstMatch.frame.minY - top
+        let start = app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: app.frame.midX, dy: top + gap / 4))
+        start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 0, dy: gap / 2)))
     }
 
     /// Lets the panel's and the keyboard's springs come to rest.

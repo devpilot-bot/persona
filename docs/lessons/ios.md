@@ -1314,6 +1314,9 @@ no initial Working row so the message shifted by one row, and pending local remo
   a moment later. A swipe right after typing then lands with the keyboard down: in the panel the pull at the grid's top
   was the sheet's, it dropped to rest and the still-focused caption brought the keyboard back. Wait until what rides
   on the keyboard is back on it before dragging, and assert the keyboard stays down and the sheet stays put.
+- `swipeDown()` on an element starts at its middle. With the keyboard up on an SE at the largest text sizes, the grid's
+  middle was under the caption, so the swipe moved the text cursor and the keyboard stayed. Drag from a point in the
+  part that shows, between the header and the caption.
 
 ## Row `confirmationDialog` lacks Cancel (2026-11-05, #1830)
 
